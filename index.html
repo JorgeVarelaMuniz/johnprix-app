@@ -347,6 +347,16 @@
   window.addEventListener("resize", drawPath);
   drawPath();
   log("Ready. Tap 'Connect to the car'.");
+  // offline mode: save the app on this device (works if the browser supports service workers)
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("sw.js")
+      .then(() => log("Offline mode ready: the app is saved on this device", "okc"))
+      .catch(e => log("Offline mode not available here (" + errText(e) + ")", "rx"));
+  } else {
+    // Bluefy (iPhone) has no service workers: the app cannot be saved, but once it
+    // is loaded it needs no internet (one file, no external code). So: keep the tab open.
+    log("Offline mode not supported here (normal in Bluefy). TIP: open the app while you have internet and KEEP THIS TAB OPEN; it works without internet after that.", "rx");
+  }
   if (navigator.bluetooth && navigator.bluetooth.getAvailability) {
     navigator.bluetooth.getAvailability().then(a => log("Bluetooth available: " + (a ? "yes" : "NO (turn Bluetooth on / allow it for this app)"), a ? "okc" : "err"))
       .catch(() => {});
