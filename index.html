@@ -10,9 +10,6 @@
     --bg: #0e1116; --panel: #171b22; --line: #262c36; --text: #e8ecf1; --muted: #8a93a3;
     --accent: #3fa7ff; --ok: #35c46b; --warn: #f2b33d; --stop: #e5484d; --knob: #3fa7ff;
   }
-  :root[data-theme="light"] {
-    --bg: #f3f5f8; --panel: #ffffff; --line: #dde2ea; --text: #151a21; --muted: #5d6675;
-  }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin: 0; background: var(--bg); color: var(--text);
     font: 15px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
@@ -80,13 +77,12 @@
 
 <section id="unsupported">
   <h2>Bluetooth not available</h2>
-  <p class="note">This browser cannot use Bluetooth. On iPhone, open this page in the <b>Bluefy</b> app (Safari does not support Web Bluetooth). On a computer, use Chrome or Edge.</p>
+  <p class="note">Open this page in Bluefy (iPhone) or Chrome/Edge.</p>
 </section>
 
 <section>
   <div class="row">
     <button id="connect" class="primary grow">Connect to the car</button>
-    <button id="theme" class="small" title="Light / dark">◐</button>
   </div>
 </section>
 
@@ -96,7 +92,6 @@
     <button id="modeM" class="sel">Manual</button>
     <button id="modeA">Automatic</button>
   </div>
-  <p class="note" id="modeNote" style="margin-top:8px">Drive with the joystick. The car stops by itself if it stops receiving commands for 1 s or the Bluetooth link drops.</p>
 </section>
 
 <section id="drive">
@@ -118,23 +113,18 @@
   <div class="row" style="margin-top:10px">
     <button id="hdg" class="small grow">Keep straight (gyro): on</button>
   </div>
-  <p class="note" style="margin-top:6px">When you drive straight, the gyro corrects any drift to the left or right.</p>
 </section>
 
 <section>
   <h2>Telemetry</h2>
   <div class="grid">
-    <div class="card"><span>Left wheel</span><b id="tVL">–</b><span>mm/s</span></div>
-    <div class="card"><span>Right wheel</span><b id="tVR">–</b><span>mm/s</span></div>
-    <div class="card"><span>Heading</span><b id="tYaw">–</b><span>deg (+ left)</span></div>
-    <div class="card"><span>x</span><b id="tX">–</b><span>mm</span></div>
-    <div class="card"><span>y</span><b id="tY">–</b><span>mm</span></div>
-    <div class="card"><span>Last data</span><b id="tAge">–</b><span>s ago</span></div>
+    <div class="card"><span>Heading</span><b id="tYaw">–</b><span>deg</span></div>
+    <div class="card"><span>x</span><b id="tX">–</b><span>cm</span></div>
+    <div class="card"><span>y</span><b id="tY">–</b><span>cm</span></div>
     <div class="card"><span>Tilt X</span><b id="tTx">–</b><span>deg</span></div>
     <div class="card"><span>Tilt Y</span><b id="tTy">–</b><span>deg</span></div>
-    <div class="card"><span>Straight fix</span><b id="tHc">–</b><span>°/s (gyro)</span></div>
+    <div class="card"><span>Link</span><b id="tAge">–</b><span>s</span></div>
   </div>
-  <p class="note" style="margin-top:8px">Heading = where the car points (gyro). Tilt X / Y = how much the car leans (accelerometer; read it with the car still). Straight fix = correction the "keep straight" PID is applying.</p>
   <div style="margin-top:10px"><canvas id="path"></canvas></div>
   <div class="row" style="margin-top:10px">
     <button id="zero" class="small grow">Set position to 0</button>
@@ -146,14 +136,14 @@
 <section id="route">
   <h2>Route (automatic mode)</h2>
   <div id="navStatus">No route running</div>
-  <p class="note" style="margin-top:8px"><b>How to use:</b> 1) Put the car on X and tap <i>Set position to 0</i>. 2) Add points: drive there with the joystick and tap <i>Save this point</i>, or type x, y. Mark the 3 waypoints as <i>stop 10 s</i>; extra points without a stop help to go around the grass. 3) Put the car back on X, facing the same way, and tap <i>Start route</i>. It goes to each point, waits 10 s where marked, comes back to X and turns to its starting direction.</p>
+  <p class="note" style="margin-top:8px">Start from X with position set to 0. x = forward, y = left (cm).</p>
   <div class="row" style="margin-top:10px">
     <button id="teachStop" class="small grow">Save this point (stop 10 s)</button>
     <button id="teachPass" class="small grow">Save this point (no stop)</button>
   </div>
   <div class="row" style="margin-top:8px">
-    <input id="wx" class="inp" type="number" inputmode="decimal" placeholder="x cm (forward)">
-    <input id="wy" class="inp" type="number" inputmode="decimal" placeholder="y cm (left)">
+    <input id="wx" class="inp" type="text" autocomplete="off" autocorrect="off" placeholder="x cm">
+    <input id="wy" class="inp" type="text" autocomplete="off" autocorrect="off" placeholder="y cm">
     <select id="ws" class="inp" style="width:auto"><option value="10">stop 10 s</option><option value="0">no stop</option></select>
     <button id="wadd" class="small">Add</button>
   </div>
@@ -162,7 +152,6 @@
     <span class="grow">Route speed</span><b id="navVLbl">200 mm/s</b>
   </div>
   <input id="navV" type="range" min="100" max="300" step="10" value="200">
-  <p class="note">200 mm/s is the speed every test was done with (most precise).</p>
   <div class="row" style="margin-top:10px">
     <button id="wclear" class="small">Clear</button>
     <button id="navStart" class="ok grow">Start route from X</button>
@@ -189,14 +178,6 @@
   let wps = [], lastPose = null, navRunning = false, waitUntil = 0, navText = "";
   try { wps = JSON.parse(localStorage.getItem("jp-route") || "[]"); } catch (e) { wps = []; }
 
-  // ---------- theme ----------
-  try { const t = localStorage.getItem("jp-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
-  $("theme").onclick = () => {
-    const t = document.documentElement.dataset.theme === "light" ? "dark" : "light";
-    document.documentElement.dataset.theme = t;
-    try { localStorage.setItem("jp-theme", t); } catch (e) {}
-    drawPath();
-  };
 
   // ---------- log ----------
   function log(msg, cls = "") {
@@ -283,11 +264,10 @@
       if (p.length < 10) return;
       const r = { t: +p[1], mode: p[2], v: +p[3], w: +p[4], vl: +p[5], vr: +p[6], yaw: +p[7] / 10, x: +p[8], y: +p[9],
                   tx: p.length > 10 ? +p[10] / 10 : NaN, ty: p.length > 11 ? +p[11] / 10 : NaN, hc: p.length > 12 ? +p[12] : NaN };
-      if (!isNaN(r.tx)) { $("tTx").textContent = r.tx.toFixed(1); $("tTy").textContent = r.ty.toFixed(1); $("tHc").textContent = r.hc; }
+      if (!isNaN(r.tx)) { $("tTx").textContent = r.tx.toFixed(1); $("tTy").textContent = r.ty.toFixed(1); }
       lastPose = { x: r.x, y: r.y };
       if (p.length > 14) navTel(r.mode, +p[13], +p[14]);
-      $("tVL").textContent = r.vl; $("tVR").textContent = r.vr;
-      $("tYaw").textContent = r.yaw.toFixed(1); $("tX").textContent = r.x; $("tY").textContent = r.y;
+      $("tYaw").textContent = r.yaw.toFixed(1); $("tX").textContent = (r.x / 10).toFixed(1); $("tY").textContent = (r.y / 10).toFixed(1);
       if (Math.abs(r.yaw - heading) > 0.5) { heading = r.yaw; drawPath(); }
       rows.push([new Date().toISOString(), r.t, r.mode, r.v, r.w, r.vl, r.vr, r.yaw, r.x, r.y,
                  isNaN(r.tx) ? "" : r.tx, isNaN(r.ty) ? "" : r.ty, isNaN(r.hc) ? "" : r.hc].join(","));
@@ -306,9 +286,6 @@
     mode = m;
     $("modeM").classList.toggle("sel", m === "M"); $("modeA").classList.toggle("sel", m === "A");
     $("drive").style.opacity = m === "M" ? 1 : 0.4;
-    $("modeNote").textContent = m === "M"
-      ? "Drive with the joystick. The car stops by itself if it stops receiving commands for 1 s or the Bluetooth link drops."
-      : "Automatic: the car follows the route by itself (the joystick is off). STOP or the blue button on the board stops it.";
   }
   $("modeM").onclick = () => { setModeUI("M"); send("M"); };
   $("modeA").onclick = () => { setModeUI("A"); $("route").scrollIntoView({ behavior: "smooth" }); };
@@ -390,7 +367,8 @@
   $("teachStop").onclick = () => teach(10);
   $("teachPass").onclick = () => teach(0);
   $("wadd").onclick = () => {
-    const x = parseFloat($("wx").value), y = parseFloat($("wy").value);
+    const num = v => parseFloat(String(v).replace(",", ".").replace(/[−–—]/g, "-"));
+    const x = num($("wx").value), y = num($("wy").value);
     if (isNaN(x) || isNaN(y)) { log("Type x and y in cm", "err"); return; }
     addPoint(x * 10, y * 10, +$("ws").value); $("wx").value = $("wy").value = "";
   };
@@ -447,7 +425,10 @@
     g.strokeStyle = css.getPropertyValue("--line"); g.lineWidth = 1;
     g.beginPath(); g.moveTo(w / 2, 0); g.lineTo(w / 2, h); g.moveTo(0, h / 2); g.lineTo(w, h / 2); g.stroke();
     g.fillStyle = css.getPropertyValue("--muted"); g.font = "11px sans-serif";
-    g.fillText("start", w / 2 + 4, h / 2 - 4);
+    // X = start and finish point, drawn centred exactly on (0, 0)
+    g.strokeStyle = css.getPropertyValue("--text"); g.lineWidth = 2.5; g.beginPath();
+    g.moveTo(w / 2 - 7, h / 2 - 7); g.lineTo(w / 2 + 7, h / 2 + 7);
+    g.moveTo(w / 2 + 7, h / 2 - 7); g.lineTo(w / 2 - 7, h / 2 + 7); g.stroke();
     g.fillText(`grid: ±${Math.round(span)} mm`, 6, h - 6);
     // planned route: X -> points -> X (dashed), points numbered (filled = stop)
     if (wps.length) {
@@ -462,8 +443,6 @@
         g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(String(i + 1), X(p), Y(p));
         g.textAlign = "start"; g.textBaseline = "alphabetic";
       });
-      g.font = "bold 13px sans-serif"; g.fillStyle = css.getPropertyValue("--text"); g.fillText("X", w / 2 - 14, h / 2 + 16);
-      g.font = "11px sans-serif";
     }
     if (trail.length > 1) {
       g.strokeStyle = css.getPropertyValue("--accent"); g.lineWidth = 2.5; g.beginPath();
