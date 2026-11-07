@@ -59,6 +59,14 @@
   .note { font-size: 13px; color: var(--muted); margin: 0; }
   .small { font-size: 12px; padding: 8px 10px; }
   #unsupported { display: none; border-color: var(--warn); }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  td, th { padding: 6px 4px; border-bottom: 1px solid var(--line); text-align: center; font-size: 14px; }
+  th { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; }
+  td button { padding: 4px 9px; font-size: 13px; border-radius: 8px; }
+  .inp { font: inherit; padding: 9px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); width: 100%; }
+  #navStatus { font-size: 17px; font-weight: 700; text-align: center; padding: 10px; border-radius: 12px; background: var(--bg); border: 1px solid var(--line); }
+  #navStatus.run { color: var(--accent); } #navStatus.wait { color: var(--warn); } #navStatus.done { color: var(--ok); }
+  .ok { background: var(--ok); color: #fff; font-weight: 700; }
 </style>
 </head>
 <body>
@@ -122,7 +130,11 @@
     <div class="card"><span>x</span><b id="tX">–</b><span>mm</span></div>
     <div class="card"><span>y</span><b id="tY">–</b><span>mm</span></div>
     <div class="card"><span>Last data</span><b id="tAge">–</b><span>s ago</span></div>
+    <div class="card"><span>Tilt X</span><b id="tTx">–</b><span>deg</span></div>
+    <div class="card"><span>Tilt Y</span><b id="tTy">–</b><span>deg</span></div>
+    <div class="card"><span>Straight fix</span><b id="tHc">–</b><span>°/s (gyro)</span></div>
   </div>
+  <p class="note" style="margin-top:8px">Heading = where the car points (gyro). Tilt X / Y = how much the car leans (accelerometer; read it with the car still). Straight fix = correction the "keep straight" PID is applying.</p>
   <div style="margin-top:10px"><canvas id="path"></canvas></div>
   <div class="row" style="margin-top:10px">
     <button id="zero" class="small grow">Set position to 0</button>
@@ -131,9 +143,30 @@
   </div>
 </section>
 
-<section>
+<section id="route">
   <h2>Route (automatic mode)</h2>
-  <p class="note">Waypoints with 10 s stops, return to X and obstacle handling will be added here when the automatic mode is ready in the firmware.</p>
+  <div id="navStatus">No route running</div>
+  <p class="note" style="margin-top:8px"><b>How to use:</b> 1) Put the car on X and tap <i>Set position to 0</i>. 2) Add points: drive there with the joystick and tap <i>Save this point</i>, or type x, y. Mark the 3 waypoints as <i>stop 10 s</i>; extra points without a stop help to go around the grass. 3) Put the car back on X, facing the same way, and tap <i>Start route</i>. It goes to each point, waits 10 s where marked, comes back to X and turns to its starting direction.</p>
+  <div class="row" style="margin-top:10px">
+    <button id="teachStop" class="small grow">Save this point (stop 10 s)</button>
+    <button id="teachPass" class="small grow">Save this point (no stop)</button>
+  </div>
+  <div class="row" style="margin-top:8px">
+    <input id="wx" class="inp" type="number" inputmode="decimal" placeholder="x cm (forward)">
+    <input id="wy" class="inp" type="number" inputmode="decimal" placeholder="y cm (left)">
+    <select id="ws" class="inp" style="width:auto"><option value="10">stop 10 s</option><option value="0">no stop</option></select>
+    <button id="wadd" class="small">Add</button>
+  </div>
+  <table style="margin-top:10px"><thead><tr><th>#</th><th>x cm</th><th>y cm</th><th>stop</th><th></th></tr></thead><tbody id="wlist"></tbody></table>
+  <div class="row" style="margin-top:10px">
+    <span class="grow">Route speed</span><b id="navVLbl">200 mm/s</b>
+  </div>
+  <input id="navV" type="range" min="100" max="300" step="10" value="200">
+  <p class="note">200 mm/s is the speed every test was done with (most precise).</p>
+  <div class="row" style="margin-top:10px">
+    <button id="wclear" class="small">Clear</button>
+    <button id="navStart" class="ok grow">Start route from X</button>
+  </div>
 </section>
 
 <section>
@@ -153,6 +186,8 @@
   let device = null, chr = null, rxBuf = "", writing = Promise.resolve(), pendingDrive = null;
   let mode = "M", joy = { active: false, x: 0, y: 0 }, lastSentZero = true, telOn = true, hdgOn = true;
   let lastRx = 0, rows = [], trail = [], heading = 0;
+  let wps = [], lastPose = null, navRunning = false, waitUntil = 0, navText = "";
+  try { wps = JSON.parse(localStorage.getItem("jp-route") || "[]"); } catch (e) { wps = []; }
 
   // ---------- theme ----------
   try { const t = localStorage.getItem("jp-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
@@ -246,24 +281,37 @@
     if (line.startsWith("T,")) {
       const p = line.split(",");
       if (p.length < 10) return;
-      const r = { t: +p[1], mode: p[2], v: +p[3], w: +p[4], vl: +p[5], vr: +p[6], yaw: +p[7] / 10, x: +p[8], y: +p[9] };
+      const r = { t: +p[1], mode: p[2], v: +p[3], w: +p[4], vl: +p[5], vr: +p[6], yaw: +p[7] / 10, x: +p[8], y: +p[9],
+                  tx: p.length > 10 ? +p[10] / 10 : NaN, ty: p.length > 11 ? +p[11] / 10 : NaN, hc: p.length > 12 ? +p[12] : NaN };
+      if (!isNaN(r.tx)) { $("tTx").textContent = r.tx.toFixed(1); $("tTy").textContent = r.ty.toFixed(1); $("tHc").textContent = r.hc; }
+      lastPose = { x: r.x, y: r.y };
+      if (p.length > 14) navTel(r.mode, +p[13], +p[14]);
       $("tVL").textContent = r.vl; $("tVR").textContent = r.vr;
       $("tYaw").textContent = r.yaw.toFixed(1); $("tX").textContent = r.x; $("tY").textContent = r.y;
       if (Math.abs(r.yaw - heading) > 0.5) { heading = r.yaw; drawPath(); }
-      rows.push([new Date().toISOString(), r.t, r.mode, r.v, r.w, r.vl, r.vr, r.yaw, r.x, r.y].join(","));
+      rows.push([new Date().toISOString(), r.t, r.mode, r.v, r.w, r.vl, r.vr, r.yaw, r.x, r.y,
+                 isNaN(r.tx) ? "" : r.tx, isNaN(r.ty) ? "" : r.ty, isNaN(r.hc) ? "" : r.hc].join(","));
       const last = trail[trail.length - 1];
       if (!last || Math.hypot(r.x - last.x, r.y - last.y) > 5) { trail.push({ x: r.x, y: r.y }); drawPath(); }
       return;
     }
     const cls = line.startsWith("ALTO") || line.startsWith("ERR") ? "err" : (line.startsWith("OK") ? "okc" : "rx");
     log("< " + line, cls);
+    navMsg(line);
   }
   setInterval(() => { $("tAge").textContent = lastRx ? ((Date.now() - lastRx) / 1000).toFixed(1) : "–"; }, 250);
 
   // ---------- mode ----------
-  $("modeM").onclick = () => { mode = "M"; $("modeM").classList.add("sel"); $("modeA").classList.remove("sel");
-    $("drive").style.opacity = 1; send("M"); };
-  $("modeA").onclick = () => { send("A"); };
+  function setModeUI(m) {
+    mode = m;
+    $("modeM").classList.toggle("sel", m === "M"); $("modeA").classList.toggle("sel", m === "A");
+    $("drive").style.opacity = m === "M" ? 1 : 0.4;
+    $("modeNote").textContent = m === "M"
+      ? "Drive with the joystick. The car stops by itself if it stops receiving commands for 1 s or the Bluetooth link drops."
+      : "Automatic: the car follows the route by itself (the joystick is off). STOP or the blue button on the board stops it.";
+  }
+  $("modeM").onclick = () => { setModeUI("M"); send("M"); };
+  $("modeA").onclick = () => { setModeUI("A"); $("route").scrollIntoView({ behavior: "smooth" }); };
 
   // ---------- joystick ----------
   const pad = $("pad"), knob = $("knob");
@@ -298,7 +346,7 @@
   $("wmax").oninput = () => $("wmaxLbl").textContent = $("wmax").value + " °/s";
 
   // ---------- STOP ----------
-  $("stop").onclick = () => { release(); send("S"); };
+  $("stop").onclick = () => { release(); send("S"); if (navRunning) navEnd("Stopped by you", ""); };
 
   // ---------- other buttons ----------
   $("hdg").onclick = () => { hdgOn = !hdgOn; $("hdg").textContent = "Keep straight (gyro): " + (hdgOn ? "on" : "off"); send(hdgOn ? "H1" : "H0"); };
@@ -307,7 +355,7 @@
   $("send").onclick = () => { const v = $("raw").value.trim(); if (v) { send(v); $("raw").value = ""; } };
   $("csv").onclick = () => {
     if (!rows.length) { log("No telemetry yet", "err"); return; }
-    const head = "phone_time,t_ms,mode,v_cmd,w_cmd,v_left,v_right,yaw_deg,x_mm,y_mm\n";
+    const head = "phone_time,t_ms,mode,v_cmd,w_cmd,v_left,v_right,yaw_deg,x_mm,y_mm,tilt_x_deg,tilt_y_deg,straight_fix_dps\n";
     const blob = new Blob([head + rows.join("\n") + "\n"], { type: "text/csv" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -315,6 +363,74 @@
     document.body.appendChild(a); a.click(); a.remove();
     log("CSV saved (" + rows.length + " rows)", "okc");
   };
+
+  // ---------- route (automatic mode) ----------
+  const NAV_NAMES = ["idle", "turning", "turning", "driving", "arriving", "waiting", "final turn", "final turn", "done"];
+  function saveRoute() { try { localStorage.setItem("jp-route", JSON.stringify(wps)); } catch (e) {} }
+  function renderRoute() {
+    const tb = $("wlist"); tb.innerHTML = "";
+    wps.forEach((w, i) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${i + 1}</td><td>${(w.x / 10).toFixed(1)}</td><td>${(w.y / 10).toFixed(1)}</td>` +
+        `<td>${w.s ? w.s + " s" : "–"}</td><td><button data-i="${i}">✕</button></td>`;
+      tb.appendChild(tr);
+    });
+    if (!wps.length) tb.innerHTML = `<tr><td colspan="5" style="color:var(--muted)">No points yet</td></tr>`;
+    tb.querySelectorAll("button").forEach(b => b.onclick = () => { wps.splice(+b.dataset.i, 1); saveRoute(); renderRoute(); drawPath(); });
+  }
+  function addPoint(x, y, s) {
+    if (wps.length >= 16) { log("Max 16 points", "err"); return; }
+    wps.push({ x: Math.round(x), y: Math.round(y), s }); saveRoute(); renderRoute(); drawPath();
+    log(`Point ${wps.length}: x ${Math.round(x)} mm, y ${Math.round(y)} mm, ${s ? "stop " + s + " s" : "no stop"}`, "okc");
+  }
+  function teach(s) {
+    if (!lastPose || Date.now() - lastRx > 2000) { log("No position from the car (connect and turn telemetry on)", "err"); return; }
+    addPoint(lastPose.x, lastPose.y, s);
+  }
+  $("teachStop").onclick = () => teach(10);
+  $("teachPass").onclick = () => teach(0);
+  $("wadd").onclick = () => {
+    const x = parseFloat($("wx").value), y = parseFloat($("wy").value);
+    if (isNaN(x) || isNaN(y)) { log("Type x and y in cm", "err"); return; }
+    addPoint(x * 10, y * 10, +$("ws").value); $("wx").value = $("wy").value = "";
+  };
+  $("wclear").onclick = () => { if (navRunning) return; wps = []; saveRoute(); renderRoute(); drawPath(); };
+  $("navV").oninput = () => $("navVLbl").textContent = $("navV").value + " mm/s";
+  function setNav(text, cls) { navText = text; $("navStatus").textContent = text; $("navStatus").className = cls || ""; }
+  function navEnd(text, cls) { navRunning = false; waitUntil = 0; setNav(text, cls); setModeUI("M"); }
+  $("navStart").onclick = () => {
+    if (!chr) { log("Not connected", "err"); return; }
+    if (!wps.length) { log("Add at least one point", "err"); return; }
+    if (navRunning) return;
+    release(); setModeUI("A");
+    trail = []; heading = 0;
+    // one command every 80 ms so the HM-10 (9600 baud) never gets two at once
+    const cmds = ["M", "Z", "WC", "WV" + $("navV").value].concat(wps.map(w => `WA${w.x},${w.y},${w.s}`), ["WL", "A"]);
+    cmds.forEach(c => { send(c); writing = writing.then(() => new Promise(r => setTimeout(r, 80))); });
+    navRunning = true; setNav("Starting…", "run"); drawPath();
+  };
+  // messages from the car
+  function navMsg(line) {
+    let m;
+    if ((m = line.match(/^NAV punto (\d+)/))) setNav(`Going to point ${m[1]} of ${wps.length}`, "run");
+    else if (line.startsWith("NAV regreso")) setNav("Going back to X", "run");
+    else if ((m = line.match(/^LLEGO (\d+) .*err=(\d+)/))) log(`Arrived at ${+m[1] ? "point " + m[1] : "X"} (odometry error ${m[2]} mm)`, "okc");
+    else if ((m = line.match(/^ESPERA (\d+)/))) { waitUntil = Date.now() + +m[1] * 1000; }
+    else if (line.startsWith("FIN AUTO")) navEnd("Route finished — back at X", "done");
+    else if (line.startsWith("ALTO") && navRunning) navEnd("Stopped: " + line.slice(5), "");
+    else if (line.startsWith("ERR") && navRunning) navEnd("Not started: " + line, "");
+  }
+  function navTel(m, st, idx) {
+    if (navRunning && m === "M" && st === 8) navEnd("Route finished — back at X", "done");
+  }
+  setInterval(() => {
+    if (navRunning && waitUntil) {
+      const left = Math.ceil((waitUntil - Date.now()) / 1000);
+      if (left > 0) { $("navStatus").textContent = `Waiting at the point: ${left} s`; $("navStatus").className = "wait"; }
+      else { waitUntil = 0; $("navStatus").textContent = navText; $("navStatus").className = "run"; }
+    }
+  }, 250);
+  renderRoute();
 
   // ---------- path plot (x forward, y left) ----------
   function drawPath() {
@@ -325,7 +441,7 @@
     const css = getComputedStyle(document.documentElement);
     g.clearRect(0, 0, w, h);
     let span = 500;
-    for (const p of trail) span = Math.max(span, Math.abs(p.x) * 1.15, Math.abs(p.y) * 1.15);
+    for (const p of trail.concat(wps)) span = Math.max(span, Math.abs(p.x) * 1.15, Math.abs(p.y) * 1.15);
     const s = Math.min(w, h) / 2 / span;            // px per mm
     const X = p => w / 2 - p.y * s, Y = p => h / 2 - p.x * s;   // up = forward (+x), left = +y
     g.strokeStyle = css.getPropertyValue("--line"); g.lineWidth = 1;
@@ -333,6 +449,22 @@
     g.fillStyle = css.getPropertyValue("--muted"); g.font = "11px sans-serif";
     g.fillText("start", w / 2 + 4, h / 2 - 4);
     g.fillText(`grid: ±${Math.round(span)} mm`, 6, h - 6);
+    // planned route: X -> points -> X (dashed), points numbered (filled = stop)
+    if (wps.length) {
+      const pts = [{ x: 0, y: 0 }].concat(wps, [{ x: 0, y: 0 }]);
+      g.setLineDash([5, 5]); g.strokeStyle = css.getPropertyValue("--muted"); g.lineWidth = 1.5; g.beginPath();
+      pts.forEach((p, i) => i ? g.lineTo(X(p), Y(p)) : g.moveTo(X(p), Y(p))); g.stroke(); g.setLineDash([]);
+      wps.forEach((p, i) => {
+        g.beginPath(); g.arc(X(p), Y(p), 9, 0, 2 * Math.PI);
+        g.fillStyle = p.s ? css.getPropertyValue("--warn") : css.getPropertyValue("--panel"); g.fill();
+        g.strokeStyle = css.getPropertyValue("--warn"); g.lineWidth = 2; g.stroke();
+        g.fillStyle = p.s ? "#000" : css.getPropertyValue("--text"); g.font = "bold 11px sans-serif";
+        g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(String(i + 1), X(p), Y(p));
+        g.textAlign = "start"; g.textBaseline = "alphabetic";
+      });
+      g.font = "bold 13px sans-serif"; g.fillStyle = css.getPropertyValue("--text"); g.fillText("X", w / 2 - 14, h / 2 + 16);
+      g.font = "11px sans-serif";
+    }
     if (trail.length > 1) {
       g.strokeStyle = css.getPropertyValue("--accent"); g.lineWidth = 2.5; g.beginPath();
       trail.forEach((p, i) => i ? g.lineTo(X(p), Y(p)) : g.moveTo(X(p), Y(p))); g.stroke();
