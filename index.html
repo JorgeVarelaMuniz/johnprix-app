@@ -148,7 +148,7 @@
   const enc = new TextEncoder(), dec = new TextDecoder();
   let device = null, chr = null, rxBuf = "", writing = Promise.resolve(), pendingDrive = null;
   let mode = "M", joy = { active: false, x: 0, y: 0 }, lastSentZero = true, telOn = true;
-  let lastRx = 0, rows = [], trail = [];
+  let lastRx = 0, rows = [], trail = [], heading = 0;
 
   // ---------- theme ----------
   try { const t = localStorage.getItem("jp-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
@@ -245,6 +245,7 @@
       const r = { t: +p[1], mode: p[2], v: +p[3], w: +p[4], vl: +p[5], vr: +p[6], yaw: +p[7] / 10, x: +p[8], y: +p[9] };
       $("tVL").textContent = r.vl; $("tVR").textContent = r.vr;
       $("tYaw").textContent = r.yaw.toFixed(1); $("tX").textContent = r.x; $("tY").textContent = r.y;
+      if (Math.abs(r.yaw - heading) > 0.5) { heading = r.yaw; drawPath(); }
       rows.push([new Date().toISOString(), r.t, r.mode, r.v, r.w, r.vl, r.vr, r.yaw, r.x, r.y].join(","));
       const last = trail[trail.length - 1];
       if (!last || Math.hypot(r.x - last.x, r.y - last.y) > 5) { trail.push({ x: r.x, y: r.y }); drawPath(); }
@@ -296,7 +297,7 @@
   $("stop").onclick = () => { release(); send("S"); };
 
   // ---------- other buttons ----------
-  $("zero").onclick = () => { trail = []; drawPath(); send("Z"); };
+  $("zero").onclick = () => { trail = []; heading = 0; drawPath(); send("Z"); };
   $("tel").onclick = () => { telOn = !telOn; $("tel").textContent = "Telemetry: " + (telOn ? "on" : "off"); send(telOn ? "T1" : "T0"); };
   $("send").onclick = () => { const v = $("raw").value.trim(); if (v) { send(v); $("raw").value = ""; } };
   $("csv").onclick = () => {
@@ -331,8 +332,17 @@
       g.strokeStyle = css.getPropertyValue("--accent"); g.lineWidth = 2.5; g.beginPath();
       trail.forEach((p, i) => i ? g.lineTo(X(p), Y(p)) : g.moveTo(X(p), Y(p))); g.stroke();
     }
+    // car: arrow pointing where the car faces (heading from the gyro, + = left)
     const p = trail[trail.length - 1] || { x: 0, y: 0 };
-    g.fillStyle = css.getPropertyValue("--ok"); g.beginPath(); g.arc(X(p), Y(p), 5, 0, 7); g.fill();
+    const th = heading * Math.PI / 180;            // 0 = up on the screen (forward)
+    const cx = X(p), cy = Y(p), L = 16;
+    const tip = [cx - Math.sin(th) * L, cy - Math.cos(th) * L];
+    const lft = [cx - Math.sin(th + 2.5) * L * 0.6, cy - Math.cos(th + 2.5) * L * 0.6];
+    const rgt = [cx - Math.sin(th - 2.5) * L * 0.6, cy - Math.cos(th - 2.5) * L * 0.6];
+    g.fillStyle = css.getPropertyValue("--ok");
+    g.beginPath(); g.moveTo(...tip); g.lineTo(...lft); g.lineTo(...rgt); g.closePath(); g.fill();
+    g.fillStyle = css.getPropertyValue("--muted");
+    g.fillText(`heading ${heading.toFixed(0)}°`, w - 90, 14);
   }
   window.addEventListener("resize", drawPath);
   drawPath();
