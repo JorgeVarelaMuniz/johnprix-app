@@ -107,6 +107,10 @@
     <div class="row"><span class="grow">Max turn rate</span><b id="wmaxLbl">60 °/s</b></div>
     <input id="wmax" type="range" min="20" max="120" step="5" value="60">
   </div>
+  <div class="row" style="margin-top:10px">
+    <button id="hdg" class="small grow">Keep straight (gyro): on</button>
+  </div>
+  <p class="note" style="margin-top:6px">When you drive straight, the gyro corrects any drift to the left or right.</p>
 </section>
 
 <section>
@@ -147,7 +151,7 @@
   const $ = id => document.getElementById(id);
   const enc = new TextEncoder(), dec = new TextDecoder();
   let device = null, chr = null, rxBuf = "", writing = Promise.resolve(), pendingDrive = null;
-  let mode = "M", joy = { active: false, x: 0, y: 0 }, lastSentZero = true, telOn = true;
+  let mode = "M", joy = { active: false, x: 0, y: 0 }, lastSentZero = true, telOn = true, hdgOn = true;
   let lastRx = 0, rows = [], trail = [], heading = 0;
 
   // ---------- theme ----------
@@ -201,7 +205,7 @@
       setStatus("Connected", "on");
       $("connect").textContent = "Disconnect";
       log("Connected to " + (device.name || "car"), "okc");
-      send("M"); send(telOn ? "T1" : "T0");
+      send("M"); send(telOn ? "T1" : "T0"); send(hdgOn ? "H1" : "H0");
     } catch (e) {
       setStatus("Disconnected");
       log("Connection failed: " + errText(e), "err");
@@ -297,6 +301,7 @@
   $("stop").onclick = () => { release(); send("S"); };
 
   // ---------- other buttons ----------
+  $("hdg").onclick = () => { hdgOn = !hdgOn; $("hdg").textContent = "Keep straight (gyro): " + (hdgOn ? "on" : "off"); send(hdgOn ? "H1" : "H0"); };
   $("zero").onclick = () => { trail = []; heading = 0; drawPath(); send("Z"); };
   $("tel").onclick = () => { telOn = !telOn; $("tel").textContent = "Telemetry: " + (telOn ? "on" : "off"); send(telOn ? "T1" : "T0"); };
   $("send").onclick = () => { const v = $("raw").value.trim(); if (v) { send(v); $("raw").value = ""; } };
