@@ -128,7 +128,6 @@
   <div style="margin-top:10px"><canvas id="path"></canvas></div>
   <div class="row" style="margin-top:10px">
     <button id="zero" class="small grow">Set 0</button>
-    <button id="tel" class="small grow">Tel: on</button>
     <button id="csv" class="small grow">Save CSV</button>
     <button id="csvClear" class="small grow">Clear CSV</button>
   </div>
@@ -330,7 +329,6 @@
   // ---------- other buttons ----------
   $("hdg").onclick = () => { hdgOn = !hdgOn; $("hdg").textContent = "Keep straight (gyro): " + (hdgOn ? "on" : "off"); send(hdgOn ? "H1" : "H0"); };
   $("zero").onclick = () => { trail = []; heading = 0; drawPath(); send("Z"); };
-  $("tel").onclick = () => { telOn = !telOn; $("tel").textContent = "Tel: " + (telOn ? "on" : "off"); send(telOn ? "T1" : "T0"); };
   $("send").onclick = () => { const v = $("raw").value.trim(); if (v) { send(v); $("raw").value = ""; } };
   // Save CSV: the iPhone share menu (WhatsApp, AirDrop, Save to Files); if the browser
   // cannot share files, share/copy the text; last option: show it to copy by hand.
