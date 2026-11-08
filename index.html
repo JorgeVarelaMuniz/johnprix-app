@@ -385,6 +385,20 @@
   #navStatus.run  { border-left-color: var(--accent); }
   #navStatus.wait { border-left-color: var(--warn); }
   #navStatus.done { border-left-color: var(--ok); }
+  /* Route stopwatch: big numbers; yellow while running, green with the official time */
+  #navTimer {
+    margin-top: 8px;
+    text-align: center;
+    font-size: 40px;
+    font-weight: 800;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;        /* digits of equal width: the number does not jump */
+    color: var(--muted);
+  }
+  #navTimer.run  { color: var(--accent); }
+  #navTimer.done { color: var(--ok); }
+  #navTimerNote  { text-align: center; font-size: 12px; color: var(--muted); min-height: 16px; }
+
   #navStatus.run  { color: var(--accent); }
   #navStatus.wait { color: var(--warn); }
   #navStatus.done { color: var(--ok); }
@@ -480,8 +494,8 @@
 
   <div class="grid">
     <div class="card"><span>Heading</span><b id="tYaw">–</b><span>deg</span></div>   <!-- gyro angle, + = left  -->
-    <div class="card"><span>x</span><b id="tX">–</b><span>cm</span></div>             <!-- forward from Set 0     -->
-    <div class="card"><span>y</span><b id="tY">–</b><span>cm</span></div>             <!-- left from Set 0        -->
+    <div class="card"><span>x</span><b id="tX">–</b><span>cm</span></div>             <!-- forward from origin   -->
+    <div class="card"><span>y</span><b id="tY">–</b><span>cm</span></div>             <!-- left from origin      -->
     <div class="card"><span>Tilt X</span><b id="tTx">–</b><span>deg</span></div>     <!-- slope (accelerometer)  -->
     <div class="card"><span>Tilt Y</span><b id="tTy">–</b><span>deg</span></div>
     <div class="card"><span>Link</span><b id="tAge">–</b><span>s</span></div>         <!-- seconds since last data -->
@@ -491,7 +505,7 @@
   <div style="margin-top:10px"><canvas id="path"></canvas></div>
 
   <div class="row" style="margin-top:10px">
-    <button id="zero" class="small grow">Set 0</button>          <!-- this spot = start X, heading 0 -->
+    <button id="zero" class="small grow">Set origin</button>     <!-- this spot = origin of the coordinates (the X): x = 0, y = 0, heading = 0 -->
     <button id="csv" class="small grow">Save CSV</button>        <!-- export telemetry for MATLAB    -->
     <button id="csvClear" class="small grow">Clear CSV</button>  <!-- delete saved telemetry rows    -->
   </div>
@@ -506,7 +520,13 @@
   <h2>Route (automatic mode)</h2>
 
   <div id="navStatus">No route running</div>
-  <p class="note" style="margin-top:8px">Start from X after "Set 0". x = forward, y = left (cm).</p>
+
+  <!-- stopwatch: counts live on the phone; when the route ends it shows the
+       official time measured by the STM32 (1 ms clock, no Bluetooth delay).
+       Split times and "moving" time go only to the Log (for analysis). -->
+  <div id="navTimer">0.0 s</div>
+  <div id="navTimerNote"></div>
+  <p class="note" style="margin-top:8px">Place the car on the X and tap "Set origin". x = forward, y = left (cm).</p>
 
   <!-- Option 1: drive the car to a spot with the joystick and save where it is -->
   <div class="row" style="margin-top:10px">
@@ -578,6 +598,9 @@
 
   // Route: points, last car position, route running?, countdown at a point
   let wps = [], lastPose = null, navRunning = false, waitUntil = 0, navText = "";
+
+  // Route stopwatch: phone time only for the live display; the official times come from the car
+  let timerT0 = 0, timerOn = false;
 
   // The route is kept in the phone (localStorage) so it survives a reload
   try { wps = JSON.parse(localStorage.getItem("jp-route") || "[]"); } catch (e) { wps = []; }
@@ -786,15 +809,16 @@
   // =====================================================================
   // STOP (works in manual and in automatic)
   // =====================================================================
-  $("stop").onclick = () => { release(); send("S"); if (navRunning) navEnd("Stopped by you", ""); };
+  $("stop").onclick = () => { release(); send("S"); if (navRunning) { timerStop("stopped"); navEnd("Stopped by you", ""); } };
 
 
 
   // =====================================================================
-  // OTHER BUTTONS: Set 0, Send, Save CSV, Clear CSV
+  // OTHER BUTTONS: Set origin, Send, Save CSV, Clear CSV
   // =====================================================================
 
-  // Set 0: this spot becomes the start X (x = 0, y = 0, heading = 0)
+  // Set origin: this spot becomes the origin of the odometry (the X): x = 0, y = 0, heading = 0
+  // (same idea as "reset odometry" in ROS robots)
   $("zero").onclick = () => { trail = []; heading = 0; drawPath(); send("Z"); };
 
   // Send a typed command (for tests, e.g. "P")
@@ -903,23 +927,53 @@
     cmds.forEach(c => { send(c); writing = writing.then(() => new Promise(r => setTimeout(r, 80))); });
 
     navRunning = true; setNav("Starting…", "run"); drawPath();
+    $("navTimer").textContent = "0.0 s"; $("navTimer").className = ""; $("navTimerNote").textContent = "";
   };
+
+  // ---------- route stopwatch ----------
+  function timerStart() {
+    timerT0 = Date.now(); timerOn = true;
+    $("navTimer").className = "run"; $("navTimerNote").textContent = "";
+  }
+  function timerStop(note) {                       // freezes the live time (stopped / error)
+    if (!timerOn) return;
+    timerOn = false; $("navTimer").className = ""; $("navTimerNote").textContent = note;
+  }
+  // official time from the car: "FIN AUTO ... t=48.37 mov=28.12"
+  function timerFinal(line) {
+    const t = line.match(/ t=([\d.]+)/), mov = line.match(/mov=([\d.]+)/);
+    timerOn = false;
+    if (t) {
+      $("navTimer").textContent = (+t[1]).toFixed(2) + " s";
+      $("navTimer").className = "done";
+      $("navTimerNote").textContent = "";
+      log(`Route time: ${t[1]} s` + (mov ? ` (moving ${mov[1]} s)` : ""), "okc");
+    } else {                                       // old firmware without t=: keep the phone time
+      $("navTimer").className = "done"; $("navTimerNote").textContent = "";
+    }
+  }
+  // live display, 10 times per second
+  setInterval(() => { if (timerOn) $("navTimer").textContent = ((Date.now() - timerT0) / 1000).toFixed(1) + " s"; }, 100);
 
   // Messages from the car during the route (the STM32 sends them in Spanish)
   function navMsg(line) {
     let m;
-    if ((m = line.match(/^NAV punto (\d+)/))) setNav(`Going to point ${m[1]} of ${wps.length}`, "run");
+    if (line.startsWith("OK A") && navRunning) timerStart();     // the car accepted the route: start
+    else if ((m = line.match(/^NAV punto (\d+)/))) setNav(`Going to point ${m[1]} of ${wps.length}`, "run");
     else if (line.startsWith("NAV regreso")) setNav("Going back to X", "run");
-    else if ((m = line.match(/^LLEGO (\d+) .*err=(\d+)/))) log(`Arrived at ${+m[1] ? "point " + m[1] : "X"} (odometry error ${m[2]} mm)`, "okc");
+    else if ((m = line.match(/^LLEGO (\d+) .*err=(\d+)/))) {
+      const t = line.match(/ t=([\d.]+)/);                     // split time from the car (new firmware)
+      log(`Arrived at ${+m[1] ? "point " + m[1] : "X"} (odometry error ${m[2]} mm${t ? ", t = " + t[1] + " s" : ""})`, "okc");
+    }
     else if ((m = line.match(/^ESPERA (\d+)/))) { waitUntil = Date.now() + +m[1] * 1000; }
-    else if (line.startsWith("FIN AUTO")) navEnd("Route finished — back at X", "done");
-    else if (line.startsWith("ALTO") && navRunning) navEnd("Stopped: " + line.slice(5), "");
-    else if (line.startsWith("ERR") && navRunning) navEnd("Not started: " + line, "");
+    else if (line.startsWith("FIN AUTO")) { timerFinal(line); navEnd("Route finished — back at X", "done"); }
+    else if (line.startsWith("ALTO") && navRunning) { timerStop("stopped"); navEnd("Stopped: " + line.slice(5), ""); }
+    else if (line.startsWith("ERR") && navRunning) { timerStop("not started"); navEnd("Not started: " + line, ""); }
   }
 
   // Backup: if the "FIN AUTO" message is lost, telemetry state 8 (done) also ends the route
   function navTel(m, st, idx) {
-    if (navRunning && m === "M" && st === 8) navEnd("Route finished — back at X", "done");
+    if (navRunning && m === "M" && st === 8) { timerStop(""); navEnd("Route finished — back at X", "done"); }
   }
 
   // Countdown while the car waits at a point
