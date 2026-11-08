@@ -3,7 +3,7 @@
 // Later: tries the network for 3 s (to get the newest version);
 // if there is no internet or the carrier cannot reach the server,
 // it opens the saved copy instead of a blank page.
-const CACHE = "johnprix-v17";
+const CACHE = "johnprix-v18";
 const FILES = ["./", "./index.html", "./sw.js"];
 
 self.addEventListener("install", e => {

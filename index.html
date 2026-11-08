@@ -879,6 +879,7 @@
       tb.appendChild(tr);
     });
     if (!wps.length) tb.innerHTML = `<tr><td colspan="5" style="color:var(--muted)">No points yet</td></tr>`;
+    if (!timerOn) showEstimate();
     tb.querySelectorAll("button").forEach(b => b.onclick = () => { wps.splice(+b.dataset.i, 1); saveRoute(); renderRoute(); drawPath(); });
   }
 
@@ -906,7 +907,7 @@
   };
 
   $("wclear").onclick = () => { if (navRunning) return; wps = []; saveRoute(); renderRoute(); drawPath(); };
-  $("navV").oninput = () => $("navVLbl").textContent = $("navV").value + " mm/s";
+  $("navV").oninput = () => { $("navVLbl").textContent = $("navV").value + " mm/s"; if (!timerOn) showEstimate(); };
 
   // Route status box
   function setNav(text, cls) { navText = text; $("navStatus").textContent = text; $("navStatus").className = cls || ""; }
@@ -927,13 +928,58 @@
     cmds.forEach(c => { send(c); writing = writing.then(() => new Promise(r => setTimeout(r, 80))); });
 
     navRunning = true; setNav("Starting…", "run"); drawPath();
-    $("navTimer").textContent = "0.0 s"; $("navTimer").className = ""; $("navTimerNote").textContent = "";
+    $("navTimer").textContent = "0.0 s"; $("navTimer").className = ""; showEstimate();
   };
+
+  // ---------- estimated route time ----------
+  // Same model as the firmware (constants copied from main.c, keep them equal).
+  // Checked with the 1 m square test (Nov 7): model 8.05 s per side + corner,
+  // measured 8.01-8.02 s (0.4 %).
+  const EST = { A: 800, LAG: 0.055, W_MAX: 90, W_MIN: 25, ALPHA: 150, TOL: 1.5, COAST: 0.03,
+                TRACK: 251.4, TURN_SETTLE: 0.5, DRIVE_SETTLE: 0.8, ARRIVE: 15 };
+  const wrap180 = a => { while (a > 180) a -= 360; while (a < -180) a += 360; return a; };
+
+  // turn in place: wheels accelerate with the ramp, top speed 90 deg/s, brake with w = sqrt(2*150*e)
+  function estTurn(deg) {
+    const aa = 2 * EST.A / EST.TRACK * 180 / Math.PI;   // deg/s^2 that the wheel ramp allows
+    let e = Math.abs(deg), w = 0, t = 0;
+    const dt = 0.001;
+    while (e - EST.COAST * w >= 0.5 * EST.TOL && t < 20) {
+      const wc = Math.min(EST.W_MAX, Math.max(EST.W_MIN, Math.sqrt(2 * EST.ALPHA * e)));
+      w = w < wc ? Math.min(w + aa * dt, wc) : Math.max(wc, w - aa * dt);
+      e -= w * dt; t += dt;
+    }
+    return t + EST.TURN_SETTLE;
+  }
+
+  // straight: drives until the stop distance v^2/(2a) + v*lag, then 0.8 s to stop and measure
+  function estDrive(d, v) {
+    const dStop = v * v / (2 * EST.A) + v * EST.LAG;
+    return (d > dStop ? (d - dStop) / v + v / (2 * EST.A) : 0) + EST.DRIVE_SETTLE;
+  }
+
+  // whole route: X -> points -> X -> final turn to the start heading
+  function estimateRoute() {
+    const v = +$("navV").value;
+    let x = 0, y = 0, h = 0, t = 0;
+    for (const p of wps.concat([{ x: 0, y: 0, s: 0 }])) {
+      const dx = p.x - x, dy = p.y - y, d = Math.hypot(dx, dy);
+      if (d >= EST.ARRIVE) {
+        const turn = wrap180(Math.atan2(dy, dx) * 180 / Math.PI - h);
+        t += estTurn(turn) + estDrive(d, v); h += turn;
+      } else t += EST.DRIVE_SETTLE;
+      t += p.s || 0; x = p.x; y = p.y;
+    }
+    return t + estTurn(wrap180(-h));
+  }
+  function showEstimate() {
+    $("navTimerNote").textContent = wps.length ? `estimated ${estimateRoute().toFixed(1)} s` : "";
+  }
 
   // ---------- route stopwatch ----------
   function timerStart() {
     timerT0 = Date.now(); timerOn = true;
-    $("navTimer").className = "run"; $("navTimerNote").textContent = "";
+    $("navTimer").className = "run"; showEstimate();
   }
   function timerStop(note) {                       // freezes the live time (stopped / error)
     if (!timerOn) return;
@@ -946,10 +992,12 @@
     if (t) {
       $("navTimer").textContent = (+t[1]).toFixed(2) + " s";
       $("navTimer").className = "done";
-      $("navTimerNote").textContent = "";
-      log(`Route time: ${t[1]} s` + (mov ? ` (moving ${mov[1]} s)` : ""), "okc");
+      showEstimate();
+      const est = estimateRoute(), dif = (+t[1] - est) / est * 100;
+      log(`Route time: ${t[1]} s` + (mov ? ` (moving ${mov[1]} s)` : "") +
+          `, estimated ${est.toFixed(1)} s (${dif >= 0 ? "+" : ""}${dif.toFixed(1)} %)`, "okc");
     } else {                                       // old firmware without t=: keep the phone time
-      $("navTimer").className = "done"; $("navTimerNote").textContent = "";
+      $("navTimer").className = "done"; showEstimate();
     }
   }
   // live display, 10 times per second
