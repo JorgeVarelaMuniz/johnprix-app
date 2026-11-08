@@ -1,72 +1,416 @@
 <!doctype html>
+<!--
+  =====================================================================
+  John Prix Control  -  MR2006B
+  ---------------------------------------------------------------------
+  Phone app (Web Bluetooth) to drive the John Prix car through the
+  HM-10 BLE module connected to the STM32 Nucleo-F446RE (USART1).
+
+  What it does:
+    1. Connects to the HM-10 (BLE service FFE0, characteristic FFE1).
+    2. Manual mode: joystick -> sends "Dv,w" 5 times per second.
+    3. Shows telemetry from the car (heading, x, y, tilt, link age)
+       and draws the path on a map.
+    4. Automatic mode: you save points (x, y, stop time) and the car
+       drives the route by itself and comes back to the start X.
+    5. Saves the telemetry as a CSV file for the MATLAB figures.
+
+  Commands sent to the STM32 (one per line, ending in "\n"):
+    M / A        manual / automatic mode
+    S            stop
+    D v,w        drive: v in mm/s, w in deg/s (+w = turn left)
+    Z            set position and heading to 0
+    T1 / H1      telemetry on / heading hold on (sent on connect)
+    WC           clear route          WV v      route speed (mm/s)
+    WA x,y,s     add point (mm, mm, stop seconds)
+    WL           list route
+
+  Coordinates: x = forward, y = left (same as the car's odometry).
+  The whole app is this single file (no internet libraries), so once it
+  is loaded it works without internet.
+  =====================================================================
+-->
 <html lang="en">
 <head>
 <meta charset="utf-8">
+
+<!-- Phone screen: no zoom, use the full screen (also behind the notch) -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
+
 <title>John Prix Control</title>
+
 <style>
+  /* =================================================================
+     COLORS (dark theme). Every color in the app comes from here,
+     so changing one value here changes it everywhere.
+     ================================================================= */
   :root {
-    --bg: #0e1116; --panel: #171b22; --line: #262c36; --text: #e8ecf1; --muted: #8a93a3;
-    --accent: #3fa7ff; --ok: #35c46b; --warn: #f2b33d; --stop: #e5484d; --knob: #3fa7ff;
+    /* Design inspired by our partner company (socioformador), John Deere.
+       Rule: neutral graphite background, brand color only where it matters.
+         - John Deere green  -> brand block (header) and "running / OK" things
+         - John Deere yellow -> things you touch (Connect, knob, sliders, mode)
+         - red               -> STOP and errors only (safety)               */
+    --bg:       #141310;   /* page background (darker John Deere black) */
+    --panel:    #1e1d19;   /* background of each section                */
+    --panel-2:  #27251f;   /* John Deere black: cards, inputs, buttons  */
+    --line:     #37342c;   /* borders and lines                         */
+    --text:     #f4f2ea;   /* main text (warm white)                    */
+    --muted:    #a29e90;   /* secondary text (warm grey)                */
+    --jd-green: #367c2b;   /* John Deere green                          */
+    --jd-yellow:#ffde00;   /* John Deere yellow                         */
+    --accent:   #ffde00;   /* = yellow: interactive things, car path    */
+    --on-accent:#1d2b16;   /* dark green text on top of the yellow      */
+    --green:    #367c2b;   /* "Start route" button                      */
+    --ok:       #6cc24a;   /* light green: connected, success, car icon */
+    --warn:     #ff9f1c;   /* orange: waiting, route points             */
+    --stop:     #d93a3f;   /* red: STOP, errors                         */
+    --knob:     #ffde00;   /* joystick knob                             */
   }
-  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { margin: 0; background: var(--bg); color: var(--text);
-    font: 15px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-  body { padding: 0 16px calc(24px + env(safe-area-inset-bottom)); max-width: 560px; margin: 0 auto; }
-  header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 0 10px; }
-  h1 { font-size: 20px; margin: 0; letter-spacing: .3px; }
-  h1 small { display: block; font-size: 12px; color: var(--muted); font-weight: 500; }
-  .pill { font-size: 12px; padding: 5px 10px; border-radius: 999px; background: var(--line); color: var(--muted); white-space: nowrap; }
-  .pill.on { background: rgba(53,196,107,.18); color: var(--ok); }
-  .pill.warn { background: rgba(242,179,61,.18); color: var(--warn); }
-  button { font: inherit; color: var(--text); background: var(--line); border: 0; border-radius: 12px; padding: 12px 14px; }
-  button:active { transform: scale(.98); }
+
+
+  /* =================================================================
+     BASE: page, text and general buttons
+     ================================================================= */
+  * {
+    box-sizing: border-box;                    /* padding counts inside the width */
+    -webkit-tap-highlight-color: transparent;  /* no grey flash when tapping (iPhone) */
+  }
+
+  html, body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+
+  body {
+    padding: 0 16px calc(24px + env(safe-area-inset-bottom));  /* space for the iPhone home bar */
+    max-width: 560px;                                           /* do not get too wide on a laptop */
+    margin: 0 auto;                                             /* centered */
+  }
+
+  button {                                     /* secondary buttons: John Deere black */
+    font: inherit;
+    font-weight: 600;
+    color: var(--text);
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 12px 14px;
+    min-height: 44px;                          /* Apple minimum touch size */
+  }
+  button:active   { transform: scale(.98); }   /* small "press" effect */
   button:disabled { opacity: .45; }
-  .primary { background: var(--accent); color: #fff; font-weight: 600; }
-  section { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 14px; margin: 12px 0; }
-  section h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); }
-  .row { display: flex; gap: 10px; align-items: center; }
-  .grow { flex: 1; }
-  .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; background: var(--line); padding: 4px; border-radius: 12px; }
-  .seg button { background: transparent; padding: 10px; }
-  .seg button.sel { background: var(--panel); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.25); }
-  #pad { position: relative; width: min(78vw, 300px); aspect-ratio: 1; margin: 6px auto 4px; border-radius: 50%;
-    background: radial-gradient(circle, var(--line) 0 2px, transparent 3px) center/100% 100%, var(--bg);
-    border: 2px solid var(--line); touch-action: none; }
-  #pad::before, #pad::after { content: ""; position: absolute; background: var(--line); }
-  #pad::before { left: 50%; top: 8%; bottom: 8%; width: 1px; }
-  #pad::after { top: 50%; left: 8%; right: 8%; height: 1px; }
-  #knob { position: absolute; width: 30%; height: 30%; left: 35%; top: 35%; border-radius: 50%;
-    background: var(--knob); box-shadow: 0 4px 14px rgba(63,167,255,.45); z-index: 2; }
-  .padlbl { position: absolute; font-size: 11px; color: var(--muted); }
-  .hint { text-align: center; color: var(--muted); font-size: 12px; margin-top: 2px; }
-  input[type=range] { width: 100%; accent-color: var(--accent); }
-  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-  .card { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; }
-  .card b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
-  .card span { font-size: 11px; color: var(--muted); }
-  canvas { width: 100%; height: 220px; display: block; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; }
-  #log { height: 150px; overflow-y: auto; font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace; background: var(--bg);
-    border: 1px solid var(--line); border-radius: 12px; padding: 8px; white-space: pre-wrap; }
-  .tx { color: var(--accent); } .rx { color: var(--muted); } .err { color: var(--stop); } .okc { color: var(--ok); }
-  #top { position: sticky; top: 0; z-index: 10; background: var(--bg); padding: env(safe-area-inset-top) 0 8px; }
-  #stop { width: 100%; height: 64px; border-radius: 16px; background: var(--stop); color: #fff; font-size: 24px;
-    font-weight: 800; letter-spacing: 2px; box-shadow: 0 6px 18px rgba(229,72,77,.4); }
+
+  .primary {                                   /* yellow button ("Connect to the car") */
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--on-accent);
+    font-weight: 800;
+    font-size: 16px;
+    min-height: 52px;
+  }
+
+  .ok {                                        /* green button ("Start route from X") */
+    background: var(--green);
+    border-color: var(--green);
+    color: #fff;
+    font-weight: 700;
+  }
+
+  .small {                                     /* small buttons in a row, all the same height */
+    font-size: 12px;
+    padding: 0 8px;
+    height: 44px;
+    white-space: nowrap;
+  }
+
+
+  /* =================================================================
+     HEADER: title, connection status and the STOP button
+     (sticky = it stays at the top while you scroll)
+     ================================================================= */
+  #top {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: var(--bg);
+    padding: env(safe-area-inset-top) 0 8px;
+  }
+
+  header {                                     /* green John Deere brand block */
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 10px 0;
+    padding: 14px 16px;
+    border-radius: 16px;
+    background: var(--jd-green);
+    background-image: linear-gradient(135deg, rgba(255,255,255,.10), rgba(0,0,0,.12));   /* soft depth */
+    box-shadow: inset 0 -4px 0 var(--jd-yellow), 0 6px 18px rgba(0,0,0,.35);              /* yellow line + shadow */
+  }
+
+  h1       { font-size: 22px; margin: 0; letter-spacing: .3px; color: #fff; font-weight: 800; }
+  h1 small { display: block; margin-top: 2px; font-size: 11px; color: var(--jd-yellow); font-weight: 700; letter-spacing: .9px; text-transform: uppercase; white-space: nowrap; }
+
+  /* Connection status pill: grey = disconnected, yellow = connecting, green = connected */
+  .pill {
+    font-size: 12px;
+    padding: 5px 10px;
+    border-radius: 999px;
+    background: rgba(0,0,0,.28);              /* dark glass on top of the green header */
+    color: #dfe8dc;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .pill.on   { background: var(--jd-yellow); color: var(--on-accent); }   /* connected = yellow */
+  .pill.warn { background: rgba(0,0,0,.28); color: var(--warn); }
+
+  #stop {                                      /* big red STOP button */
+    width: 100%;
+    height: 64px;
+    border-radius: 16px;
+    background: var(--stop);
+    color: #fff;
+    font-size: 26px;
+    font-weight: 900;
+    letter-spacing: 6px;                       /* wide letters: reads like a machine label */
+    border: 0;
+    box-shadow: 0 6px 18px rgba(217,58,63,.35);
+  }
+
+
+  /* =================================================================
+     SECTIONS (cards) and layout helpers
+     ================================================================= */
+  section {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    padding: 16px;
+    margin: 12px 0;
+  }
+
+  section h2 {                                 /* small grey title of each section */
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 10px;
+    font-size: 12px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 1.4px;
+    color: var(--text);
+  }
+
+  section h2::before {                         /* small yellow bar before each title */
+    content: "";
+    width: 4px;
+    height: 13px;
+    border-radius: 2px;
+    background: var(--jd-yellow);
+  }
+
+  .row  { display: flex; gap: 10px; align-items: center; }   /* items side by side */
+  .grow { flex: 1; }                                         /* takes the free space */
+
   .note { font-size: 13px; color: var(--muted); margin: 0; }
-  .small { font-size: 12px; padding: 0 8px; height: 40px; white-space: nowrap; }
-  #unsupported { display: none; border-color: var(--warn); }
+
+  #unsupported { display: none; border-color: var(--warn); } /* shown only without Bluetooth */
+
+
+  /* =================================================================
+     MODE selector (Manual / Automatic)
+     ================================================================= */
+  .seg {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    background: var(--panel-2);
+    padding: 4px;
+    border-radius: 12px;
+  }
+  .seg button     { background: transparent; border: 0; padding: 10px; color: var(--muted); }
+  .seg button.sel { background: var(--jd-green); color: #fff; font-weight: 700; box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+
+
+  /* =================================================================
+     JOYSTICK
+     #pad   = the round area you touch
+     #knob  = the blue circle that follows your finger
+     ::before / ::after = the vertical and horizontal cross lines
+     .padlbl = the words forward / back / left / right
+     ================================================================= */
+  #pad {
+    position: relative;
+    width: min(78vw, 300px);
+    aspect-ratio: 1;                           /* always a perfect circle */
+    margin: 6px auto 4px;
+    border-radius: 50%;
+    background:                                /* center dot + one guide ring (half speed) */
+      radial-gradient(circle, var(--line) 0 2px, transparent 3px),
+      /* "closest-side" = the % are measured from the center to the edge (the radius).
+         The speed grows with the distance from the center (v = y * Max speed), so when
+         the center of the knob is on this ring at 50 %, the car goes at half the max speed. */
+      radial-gradient(circle closest-side, transparent 0 49.5%, var(--line) 50% 50.6%, transparent 51.2%),
+      var(--bg);
+    border: 2px solid var(--line);
+    box-shadow: inset 0 10px 30px rgba(0,0,0,.45);   /* sunken look */
+    touch-action: none;                        /* finger moves the knob, not the page */
+  }
+
+  #pad::before, #pad::after {
+    content: "";
+    position: absolute;
+    background: var(--line);
+  }
+  /* The lines stop before the words (labels sit 5 % from the edge; "RIGHT" ends at
+     about 19 %, "FORWARD" at about 9 %), so a line never touches a word. */
+  #pad::before { left: 50%; top: 14%; bottom: 14%; width: 1px; }   /* vertical line   */
+  #pad::after  { top: 50%; left: 22%; right: 22%; height: 1px; }   /* horizontal line */
+
+  #knob {
+    position: absolute;
+    width: 30%;
+    height: 30%;
+    left: 35%;                                 /* 35 % + 30 % / 2 = 50 % -> centered */
+    top: 35%;
+    border-radius: 50%;
+    background: var(--knob);
+    box-shadow: 0 6px 18px rgba(255,222,0,.28), inset 0 -4px 0 rgba(0,0,0,.12);   /* soft glow + slight 3D */
+    z-index: 2;                                /* above the lines and labels */
+  }
+
+  .padlbl {                                   /* line-height 1: the box is exactly the text, so the */
+    position: absolute;                        /* same % from the edge looks the same on all 4 sides  */
+    font-size: 10px;
+    line-height: 1;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .hint {                                      /* "v = ... mm/s · w = ... °/s" under the joystick */
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 2px;
+  }
+
+  input[type=range] { width: 100%; accent-color: var(--accent); }   /* sliders */
+
+
+  /* =================================================================
+     TELEMETRY cards (3 per row) and the path map
+     ================================================================= */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+
+  .card {                                      /* instrument style: label on top, number + unit below */
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: baseline;
+    column-gap: 4px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 9px 11px;
+  }
+  .card span:first-child {                     /* name: small uppercase label */
+    grid-column: 1 / -1;
+    margin-bottom: 2px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .card b    { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; }   /* the number */
+  .card span { font-size: 11px; color: var(--muted); }                                      /* the unit   */
+
+  canvas {                                     /* path map */
+    width: 100%;
+    height: 240px;
+    display: block;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+  }
+
+
+  /* =================================================================
+     ROUTE: text inputs, point table and route status
+     ================================================================= */
+  .inp {
+    font: inherit;
+    padding: 9px;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    color: var(--text);
+    width: 100%;
+    min-height: 44px;
+  }
+
   table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-  td, th { padding: 6px 4px; border-bottom: 1px solid var(--line); text-align: center; font-size: 14px; }
-  th { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; }
-  td button { padding: 4px 9px; font-size: 13px; border-radius: 8px; }
-  .inp { font: inherit; padding: 9px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); width: 100%; }
-  #navStatus { font-size: 17px; font-weight: 700; text-align: center; padding: 10px; border-radius: 12px; background: var(--bg); border: 1px solid var(--line); }
-  #navStatus.run { color: var(--accent); } #navStatus.wait { color: var(--warn); } #navStatus.done { color: var(--ok); }
-  .ok { background: var(--ok); color: #fff; font-weight: 700; }
+  td, th {
+    padding: 6px 4px;
+    border-bottom: 1px solid var(--line);
+    text-align: center;
+    font-size: 14px;
+  }
+  th        { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; }
+  td button { padding: 4px 10px; min-height: 32px; font-size: 13px; border-radius: 8px; }   /* the ✕ delete button */
+
+  /* Route status box: blue = running, yellow = waiting at a point, green = finished */
+  #navStatus {
+    font-size: 17px;
+    font-weight: 700;
+    text-align: center;
+    padding: 10px;
+    border-radius: 12px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-left: 5px solid var(--line);        /* colored bar on the left shows the state */
+  }
+  #navStatus.run  { border-left-color: var(--accent); }
+  #navStatus.wait { border-left-color: var(--warn); }
+  #navStatus.done { border-left-color: var(--ok); }
+  #navStatus.run  { color: var(--accent); }
+  #navStatus.wait { color: var(--warn); }
+  #navStatus.done { color: var(--ok); }
+
+
+  /* =================================================================
+     LOG (messages sent and received)
+     ================================================================= */
+  #log {
+    height: 150px;
+    overflow-y: auto;
+    font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 8px;
+    white-space: pre-wrap;
+  }
+  .tx  { color: var(--accent); }   /* sent to the car   */
+  .rx  { color: var(--muted); }    /* received from it  */
+  .err { color: var(--stop); }     /* errors            */
+  .okc { color: var(--ok); }       /* success messages  */
 </style>
 </head>
+
+
 <body>
+
+<!-- ===================== HEADER + STOP (always visible) ===================== -->
 <div id="top">
   <header>
     <h1>John Prix<small>MR2006B · STM32 + HM-10 control</small></h1>
@@ -75,17 +419,23 @@
   <button id="stop">STOP</button>
 </div>
 
+
+<!-- ===================== Warning if the browser has no Bluetooth ===================== -->
 <section id="unsupported">
   <h2>Bluetooth not available</h2>
   <p class="note">Open this page in Bluefy (iPhone) or Chrome/Edge.</p>
 </section>
 
+
+<!-- ===================== CONNECT ===================== -->
 <section>
   <div class="row">
     <button id="connect" class="primary grow">Connect to the car</button>
   </div>
 </section>
 
+
+<!-- ===================== MODE ===================== -->
 <section>
   <h2>Mode</h2>
   <div class="seg">
@@ -94,68 +444,103 @@
   </div>
 </section>
 
+
+<!-- ===================== DRIVE (joystick + speed limits) ===================== -->
 <section id="drive">
   <h2>Drive</h2>
+
   <div id="pad">
     <div id="knob"></div>
-    <span class="padlbl" style="top:2%;left:50%;transform:translateX(-50%)">forward</span>
-    <span class="padlbl" style="bottom:2%;left:50%;transform:translateX(-50%)">back</span>
-    <span class="padlbl" style="left:3%;top:50%;transform:translateY(-50%)">left</span>
-    <span class="padlbl" style="right:3%;top:50%;transform:translateY(-50%)">right</span>
+    <span class="padlbl" style="top:5%;left:50%;transform:translateX(-50%)">forward</span>
+    <span class="padlbl" style="bottom:5%;left:50%;transform:translateX(-50%)">reverse</span>
+    <span class="padlbl" style="left:5%;top:50%;transform:translateY(-50%)">left</span>
+    <span class="padlbl" style="right:5%;top:50%;transform:translateY(-50%)">right</span>
   </div>
+
+  <!-- the command being sent right now -->
   <div class="hint" id="cmdView">v = 0 mm/s · w = 0 °/s</div>
+
+  <!-- joystick fully pushed = these maximum values -->
   <div style="margin-top:12px">
     <div class="row"><span class="grow">Max speed</span><b id="vmaxLbl">150 mm/s</b></div>
     <input id="vmax" type="range" min="50" max="350" step="10" value="150">
+
     <div class="row"><span class="grow">Max turn rate</span><b id="wmaxLbl">60 °/s</b></div>
     <input id="wmax" type="range" min="20" max="120" step="5" value="60">
   </div>
 </section>
 
+
+<!-- ===================== TELEMETRY (data the car sends back) ===================== -->
 <section>
   <h2>Telemetry</h2>
+
   <div class="grid">
-    <div class="card"><span>Heading</span><b id="tYaw">–</b><span>deg</span></div>
-    <div class="card"><span>x</span><b id="tX">–</b><span>cm</span></div>
-    <div class="card"><span>y</span><b id="tY">–</b><span>cm</span></div>
-    <div class="card"><span>Tilt X</span><b id="tTx">–</b><span>deg</span></div>
+    <div class="card"><span>Heading</span><b id="tYaw">–</b><span>deg</span></div>   <!-- gyro angle, + = left  -->
+    <div class="card"><span>x</span><b id="tX">–</b><span>cm</span></div>             <!-- forward from Set 0     -->
+    <div class="card"><span>y</span><b id="tY">–</b><span>cm</span></div>             <!-- left from Set 0        -->
+    <div class="card"><span>Tilt X</span><b id="tTx">–</b><span>deg</span></div>     <!-- slope (accelerometer)  -->
     <div class="card"><span>Tilt Y</span><b id="tTy">–</b><span>deg</span></div>
-    <div class="card"><span>Link</span><b id="tAge">–</b><span>s</span></div>
+    <div class="card"><span>Link</span><b id="tAge">–</b><span>s</span></div>         <!-- seconds since last data -->
   </div>
+
+  <!-- path map: blue line = real path, dashed = planned route, X = start -->
   <div style="margin-top:10px"><canvas id="path"></canvas></div>
+
   <div class="row" style="margin-top:10px">
-    <button id="zero" class="small grow">Set 0</button>
-    <button id="csv" class="small grow">Save CSV</button>
-    <button id="csvClear" class="small grow">Clear CSV</button>
+    <button id="zero" class="small grow">Set 0</button>          <!-- this spot = start X, heading 0 -->
+    <button id="csv" class="small grow">Save CSV</button>        <!-- export telemetry for MATLAB    -->
+    <button id="csvClear" class="small grow">Clear CSV</button>  <!-- delete saved telemetry rows    -->
   </div>
+
+  <!-- last option to get the CSV: text shown here to copy by hand -->
   <textarea id="csvText" class="inp" style="display:none;height:120px;margin-top:8px;font:11px ui-monospace,monospace"></textarea>
 </section>
 
+
+<!-- ===================== ROUTE (automatic mode) ===================== -->
 <section id="route">
   <h2>Route (automatic mode)</h2>
+
   <div id="navStatus">No route running</div>
   <p class="note" style="margin-top:8px">Start from X after "Set 0". x = forward, y = left (cm).</p>
+
+  <!-- Option 1: drive the car to a spot with the joystick and save where it is -->
   <div class="row" style="margin-top:10px">
     <button id="teachStop" class="small grow">Save point (stop 10 s)</button>
     <button id="teachPass" class="small grow">Save point (no stop)</button>
   </div>
+
+  <!-- Option 2: type the point (text inputs so the iPhone keyboard has the minus sign) -->
   <div class="row" style="margin-top:8px">
     <input id="wx" class="inp" type="text" autocomplete="off" autocorrect="off" placeholder="x cm">
     <input id="wy" class="inp" type="text" autocomplete="off" autocorrect="off" placeholder="y cm">
-    <select id="ws" class="inp" style="width:auto"><option value="10">stop 10 s</option><option value="0">no stop</option></select>
+    <select id="ws" class="inp" style="width:auto">
+      <option value="10">stop 10 s</option>
+      <option value="0">no stop</option>
+    </select>
     <button id="wadd" class="small">Add</button>
   </div>
-  <table style="margin-top:10px"><thead><tr><th>#</th><th>x cm</th><th>y cm</th><th>stop</th><th></th></tr></thead><tbody id="wlist"></tbody></table>
+
+  <!-- list of points -->
+  <table style="margin-top:10px">
+    <thead><tr><th>#</th><th>x cm</th><th>y cm</th><th>stop</th><th></th></tr></thead>
+    <tbody id="wlist"></tbody>
+  </table>
+
   <div class="row" style="margin-top:10px">
     <span class="grow">Route speed</span><b id="navVLbl">200 mm/s</b>
   </div>
   <input id="navV" type="range" min="100" max="300" step="10" value="200">
+
   <div class="row" style="margin-top:10px">
     <button id="wclear" class="small">Clear points</button>
     <button id="navStart" class="ok grow">Start route from X</button>
   </div>
 </section>
 
+
+<!-- ===================== LOG + manual command box ===================== -->
 <section>
   <h2>Log</h2>
   <div id="log"></div>
@@ -165,32 +550,60 @@
   </div>
 </section>
 
+
+
 <script>
 (() => {
+  // =====================================================================
+  // CONSTANTS AND STATE
+  // =====================================================================
+
+  // HM-10 BLE UUIDs: service FFE0 and characteristic FFE1 (the "serial port")
   const SVC = "0000ffe0-0000-1000-8000-00805f9b34fb", CHR = "0000ffe1-0000-1000-8000-00805f9b34fb";
-  const $ = id => document.getElementById(id);
-  const enc = new TextEncoder(), dec = new TextDecoder();
+
+  const $ = id => document.getElementById(id);              // short way to get an element
+  const enc = new TextEncoder(), dec = new TextDecoder();   // text <-> bytes
+
+  // Bluetooth
   let device = null, chr = null, rxBuf = "", writing = Promise.resolve(), pendingDrive = null;
+
+  // Driving: mode "M" (manual) or "A" (automatic), joystick position (-1..1)
   let mode = "M", joy = { active: false, x: 0, y: 0 }, lastSentZero = true, telOn = true, hdgOn = true;
+
+  // Telemetry: time of the last line, CSV rows, path points, current heading
   let lastRx = 0, rows = [], trail = [], heading = 0;
+
+  // Route: points, last car position, route running?, countdown at a point
   let wps = [], lastPose = null, navRunning = false, waitUntil = 0, navText = "";
+
+  // The route is kept in the phone (localStorage) so it survives a reload
   try { wps = JSON.parse(localStorage.getItem("jp-route") || "[]"); } catch (e) { wps = []; }
 
 
-  // ---------- log ----------
+
+  // =====================================================================
+  // LOG: writes a line with the time in the Log box (max 200 lines)
+  // =====================================================================
   function log(msg, cls = "") {
     const el = $("log"), line = document.createElement("div");
     line.className = cls;
     line.textContent = new Date().toLocaleTimeString() + "  " + msg;
     el.appendChild(line);
     while (el.childNodes.length > 200) el.removeChild(el.firstChild);
-    el.scrollTop = el.scrollHeight;
+    el.scrollTop = el.scrollHeight;               // always show the newest line
   }
+
+  // Changes the status pill at the top (Disconnected / Connecting / Connected)
   function setStatus(text, cls) { const s = $("status"); s.textContent = text; s.className = "pill " + (cls || ""); }
 
+  // Browser without Web Bluetooth -> show the warning and disable "Connect"
   if (!navigator.bluetooth) { $("unsupported").style.display = "block"; $("connect").disabled = true; }
 
-  // ---------- Bluetooth ----------
+
+
+  // =====================================================================
+  // BLUETOOTH: connect, disconnect, send and receive
+  // =====================================================================
   const errText = e => (e && (e.message || e.name)) ? `${e.name || "Error"}: ${e.message || ""}` : String(e);
 
   // 1st try: show only modules that advertise the HM-10 service.
@@ -205,36 +618,45 @@
     }
   }
 
+  // Connect: pick the module -> open GATT -> get FFE1 -> listen for data
   async function connect() {
     try {
       setStatus("Searching…", "warn");
       device = await pickDevice();
       device.addEventListener("gattserverdisconnected", onDisconnected);
+
       setStatus("Connecting…", "warn");
       const server = await device.gatt.connect();
       const svc = await server.getPrimaryService(SVC);
       chr = await svc.getCharacteristic(CHR);
       chr.addEventListener("characteristicvaluechanged", onData);
       await chr.startNotifications();
+
       setStatus("Connected", "on");
       $("connect").textContent = "Disconnect";
       log("Connected to " + (device.name || "car"), "okc");
+
+      // start in manual mode with telemetry and heading hold on
       send("M"); send(telOn ? "T1" : "T0"); send(hdgOn ? "H1" : "H0");
     } catch (e) {
       setStatus("Disconnected");
       log("Connection failed: " + errText(e), "err");
     }
   }
+
   function onDisconnected() {
     chr = null; setStatus("Disconnected");
     $("connect").textContent = "Connect to the car";
     log("Bluetooth link lost (the car stops by itself)", "err");
   }
+
+  // The same button connects or disconnects
   $("connect").onclick = () => {
     if (device && device.gatt.connected) device.gatt.disconnect(); else connect();
   };
 
-  // one write at a time (BLE does not allow parallel writes)
+  // Send one command. Writes are queued: BLE does not allow parallel writes.
+  // quiet = true -> do not write it in the Log (used for the joystick, 5 per second)
   function send(cmd, quiet) {
     if (!chr) { if (!quiet) log("Not connected: " + cmd, "err"); return; }
     const data = enc.encode(cmd + "\n");
@@ -244,6 +666,7 @@
     if (!quiet) log("> " + cmd, "tx");
   }
 
+  // Data arrives in pieces (BLE packets of ~20 bytes): join them and cut by "\n"
   function onData(ev) {
     rxBuf += dec.decode(ev.target.value);
     let i;
@@ -251,64 +674,98 @@
       const line = rxBuf.slice(0, i).trim(); rxBuf = rxBuf.slice(i + 1);
       if (line) handleLine(line);
     }
-    if (rxBuf.length > 300) rxBuf = "";
+    if (rxBuf.length > 300) rxBuf = "";            // garbage without "\n": throw it away
   }
 
-  // T,t_ms,mode,v_cmd,w_cmd,v_left,v_right,yaw_x10,x_mm,y_mm
+
+
+  // =====================================================================
+  // TELEMETRY LINE FROM THE CAR
+  // T,t_ms,mode,v_cmd,w_cmd,v_left,v_right,yaw_x10,x_mm,y_mm,tilt_x_x10,tilt_y_x10,straight_fix,nav_state,nav_idx
+  // (yaw and tilt come multiplied by 10 to send integers)
+  // =====================================================================
   function handleLine(line) {
     lastRx = Date.now();
+
     if (line.startsWith("T,")) {
       const p = line.split(",");
-      if (p.length < 10) return;
+      if (p.length < 10) return;                   // incomplete line
+
       const r = { t: +p[1], mode: p[2], v: +p[3], w: +p[4], vl: +p[5], vr: +p[6], yaw: +p[7] / 10, x: +p[8], y: +p[9],
                   tx: p.length > 10 ? +p[10] / 10 : NaN, ty: p.length > 11 ? +p[11] / 10 : NaN, hc: p.length > 12 ? +p[12] : NaN };
+
+      // update the cards
       if (!isNaN(r.tx)) { $("tTx").textContent = r.tx.toFixed(1); $("tTy").textContent = r.ty.toFixed(1); }
       lastPose = { x: r.x, y: r.y };
       if (p.length > 14) navTel(r.mode, +p[13], +p[14]);
       $("tYaw").textContent = r.yaw.toFixed(1); $("tX").textContent = (r.x / 10).toFixed(1); $("tY").textContent = (r.y / 10).toFixed(1);
       if (Math.abs(r.yaw - heading) > 0.5) { heading = r.yaw; drawPath(); }
+
+      // save the row for the CSV
       rows.push([new Date().toISOString(), r.t, r.mode, r.v, r.w, r.vl, r.vr, r.yaw, r.x, r.y,
                  isNaN(r.tx) ? "" : r.tx, isNaN(r.ty) ? "" : r.ty, isNaN(r.hc) ? "" : r.hc].join(","));
+
+      // add a point to the path only if the car moved more than 5 mm
       const last = trail[trail.length - 1];
       if (!last || Math.hypot(r.x - last.x, r.y - last.y) > 5) { trail.push({ x: r.x, y: r.y }); drawPath(); }
       return;
     }
+
+    // any other line is a message (OK..., ERR..., ALTO..., NAV...) -> Log
     const cls = line.startsWith("ALTO") || line.startsWith("ERR") ? "err" : (line.startsWith("OK") ? "okc" : "rx");
     log("< " + line, cls);
     navMsg(line);
   }
+
+  // "Link" card: seconds since the last line (if it grows, the link is lost)
   setInterval(() => { $("tAge").textContent = lastRx ? ((Date.now() - lastRx) / 1000).toFixed(1) : "–"; }, 250);
 
-  // ---------- mode ----------
+
+
+  // =====================================================================
+  // MODE (Manual / Automatic)
+  // =====================================================================
   function setModeUI(m) {
     mode = m;
     $("modeM").classList.toggle("sel", m === "M"); $("modeA").classList.toggle("sel", m === "A");
-    $("drive").style.opacity = m === "M" ? 1 : 0.4;
+    $("drive").style.opacity = m === "M" ? 1 : 0.4;   // joystick greyed out in automatic
   }
   $("modeM").onclick = () => { setModeUI("M"); send("M"); };
-  $("modeA").onclick = () => { setModeUI("A"); $("route").scrollIntoView({ behavior: "smooth" }); };
+  $("modeA").onclick = () => { setModeUI("A"); $("route").scrollIntoView({ behavior: "smooth" }); };   // "A" is sent by "Start route"
 
-  // ---------- joystick ----------
+
+
+  // =====================================================================
+  // JOYSTICK
+  // x, y go from -1 to 1 (right = +x, down = +y on the screen)
+  // =====================================================================
   const pad = $("pad"), knob = $("knob");
+
   function setJoy(ev) {
     const r = pad.getBoundingClientRect();
     let x = (ev.clientX - r.left) / r.width * 2 - 1, y = (ev.clientY - r.top) / r.height * 2 - 1;
-    const m = Math.hypot(x, y); if (m > 1) { x /= m; y /= m; }
+    const m = Math.hypot(x, y); if (m > 1) { x /= m; y /= m; }   // keep it inside the circle
     joy.x = x; joy.y = y;
     knob.style.left = (35 + x * 35) + "%"; knob.style.top = (35 + y * 35) + "%";
   }
+
   pad.addEventListener("pointerdown", e => { joy.active = true; pad.setPointerCapture(e.pointerId); setJoy(e); });
   pad.addEventListener("pointermove", e => { if (joy.active) setJoy(e); });
+
+  // finger lifted -> knob back to the center, command 0
   const release = () => { joy.active = false; joy.x = joy.y = 0; knob.style.left = knob.style.top = "35%"; };
   pad.addEventListener("pointerup", release); pad.addEventListener("pointercancel", release);
 
+  // Joystick -> command. Dead zone of 12 % so small finger shakes send 0.
   function currentCmd() {
     const dz = v => Math.abs(v) < 0.12 ? 0 : v;
-    const v = Math.round(-dz(joy.y) * +$("vmax").value);
-    const w = Math.round(-dz(joy.x) * +$("wmax").value);   // left = +w
+    const v = Math.round(-dz(joy.y) * +$("vmax").value);     // up on the screen = forward
+    const w = Math.round(-dz(joy.x) * +$("wmax").value);     // left = +w
     return { v, w };
   }
-  // send drive commands 5 times per second while the joystick is used
+
+  // Send drive commands 5 times per second (every 200 ms) while the joystick is used.
+  // "D0,0" is sent only once when you let go (not 5 per second).
   setInterval(() => {
     const c = joy.active ? currentCmd() : { v: 0, w: 0 };
     $("cmdView").textContent = `v = ${c.v} mm/s · w = ${c.w} °/s`;
@@ -317,15 +774,29 @@
     else if (!lastSentZero) { send("D0,0", true); lastSentZero = true; }
   }, 200);
 
+  // slider labels
   $("vmax").oninput = () => $("vmaxLbl").textContent = $("vmax").value + " mm/s";
   $("wmax").oninput = () => $("wmaxLbl").textContent = $("wmax").value + " °/s";
 
-  // ---------- STOP ----------
+
+
+  // =====================================================================
+  // STOP (works in manual and in automatic)
+  // =====================================================================
   $("stop").onclick = () => { release(); send("S"); if (navRunning) navEnd("Stopped by you", ""); };
 
-  // ---------- other buttons ----------
+
+
+  // =====================================================================
+  // OTHER BUTTONS: Set 0, Send, Save CSV, Clear CSV
+  // =====================================================================
+
+  // Set 0: this spot becomes the start X (x = 0, y = 0, heading = 0)
   $("zero").onclick = () => { trail = []; heading = 0; drawPath(); send("Z"); };
+
+  // Send a typed command (for tests, e.g. "P")
   $("send").onclick = () => { const v = $("raw").value.trim(); if (v) { send(v); $("raw").value = ""; } };
+
   // Save CSV: the iPhone share menu (WhatsApp, AirDrop, Save to Files); if the browser
   // cannot share files, share/copy the text; last option: show it to copy by hand.
   $("csv").onclick = async () => {
@@ -333,26 +804,45 @@
     const head = "phone_time,t_ms,mode,v_cmd,w_cmd,v_left,v_right,yaw_deg,x_mm,y_mm,tilt_x_deg,tilt_y_deg,straight_fix_dps\n";
     const text = head + rows.join("\n") + "\n";
     const name = "johnprix_telemetry_" + new Date().toISOString().replace(/[:.]/g, "-") + ".csv";
+
+    // 1) share as a file
     try {
       const file = new File([text], name, { type: "text/csv" });
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({ files: [file], title: name }); log("CSV shared (" + rows.length + " rows)", "okc"); return;
       }
+      // 2) share as text
       if (navigator.share) { await navigator.share({ title: name, text }); log("CSV shared as text (" + rows.length + " rows)", "okc"); return; }
     } catch (e) { if (e && e.name === "AbortError") return; log("Share not available: " + errText(e), "rx"); }
+
+    // 3) copy to the clipboard
     try { await navigator.clipboard.writeText(text); log("CSV copied (" + rows.length + " rows): paste it in WhatsApp or Notes", "okc"); return; }
     catch (e) { /* show it */ }
+
+    // 4) show the text in the box to copy it by hand
     const ta = $("csvText"); ta.value = text; ta.style.display = "block"; ta.focus(); ta.select();
     log("Select all and copy the text below", "rx");
   };
+
   $("csvClear").onclick = () => { rows = []; try { localStorage.removeItem("jp-rows"); } catch (e) {} log("Telemetry cleared", "okc"); };
-  // keep the telemetry if the page is reloaded
+
+  // keep the telemetry if the page is reloaded (saved every 5 s, last 20 000 rows)
   try { rows = JSON.parse(localStorage.getItem("jp-rows") || "[]"); } catch (e) { rows = []; }
   setInterval(() => { try { localStorage.setItem("jp-rows", JSON.stringify(rows.slice(-20000))); } catch (e) {} }, 5000);
 
-  // ---------- route (automatic mode) ----------
+
+
+  // =====================================================================
+  // ROUTE (automatic mode)
+  // Each point: x, y in mm and s = seconds to stop there (0 = no stop)
+  // =====================================================================
+
+  // nav_state numbers sent by the STM32 (same order as in main.c)
   const NAV_NAMES = ["idle", "turning", "turning", "driving", "arriving", "waiting", "final turn", "final turn", "done"];
+
   function saveRoute() { try { localStorage.setItem("jp-route", JSON.stringify(wps)); } catch (e) {} }
+
+  // Redraws the table of points (with a ✕ button to delete each one)
   function renderRoute() {
     const tb = $("wlist"); tb.innerHTML = "";
     wps.forEach((w, i) => {
@@ -364,39 +854,55 @@
     if (!wps.length) tb.innerHTML = `<tr><td colspan="5" style="color:var(--muted)">No points yet</td></tr>`;
     tb.querySelectorAll("button").forEach(b => b.onclick = () => { wps.splice(+b.dataset.i, 1); saveRoute(); renderRoute(); drawPath(); });
   }
+
+  // Adds a point (max 16, the same limit as the STM32)
   function addPoint(x, y, s) {
     if (wps.length >= 16) { log("Max 16 points", "err"); return; }
     wps.push({ x: Math.round(x), y: Math.round(y), s }); saveRoute(); renderRoute(); drawPath();
     log(`Point ${wps.length}: x ${Math.round(x)} mm, y ${Math.round(y)} mm, ${s ? "stop " + s + " s" : "no stop"}`, "okc");
   }
+
+  // "Save point": uses the car's current position (telemetry must be recent, < 2 s)
   function teach(s) {
     if (!lastPose || Date.now() - lastRx > 2000) { log("No position from the car (connect and turn telemetry on)", "err"); return; }
     addPoint(lastPose.x, lastPose.y, s);
   }
   $("teachStop").onclick = () => teach(10);
   $("teachPass").onclick = () => teach(0);
+
+  // "Add": typed point in cm. Accepts "," as decimal and the iPhone's long minus signs.
   $("wadd").onclick = () => {
     const num = v => parseFloat(String(v).replace(",", ".").replace(/[−–—]/g, "-"));
     const x = num($("wx").value), y = num($("wy").value);
     if (isNaN(x) || isNaN(y)) { log("Type x and y in cm", "err"); return; }
-    addPoint(x * 10, y * 10, +$("ws").value); $("wx").value = $("wy").value = "";
+    addPoint(x * 10, y * 10, +$("ws").value); $("wx").value = $("wy").value = "";   // cm -> mm
   };
+
   $("wclear").onclick = () => { if (navRunning) return; wps = []; saveRoute(); renderRoute(); drawPath(); };
   $("navV").oninput = () => $("navVLbl").textContent = $("navV").value + " mm/s";
+
+  // Route status box
   function setNav(text, cls) { navText = text; $("navStatus").textContent = text; $("navStatus").className = cls || ""; }
   function navEnd(text, cls) { navRunning = false; waitUntil = 0; setNav(text, cls); setModeUI("M"); }
+
+  // "Start route from X": sends the whole route and then "A" to start
   $("navStart").onclick = () => {
     if (!chr) { log("Not connected", "err"); return; }
     if (!wps.length) { log("Add at least one point", "err"); return; }
     if (navRunning) return;
+
     release(); setModeUI("A");
     trail = []; heading = 0;
+
+    // M (manual, stop) -> Z (this is X) -> WC (clear) -> WV (speed) -> WA... (points) -> WL (list) -> A (go)
     // one command every 80 ms so the HM-10 (9600 baud) never gets two at once
     const cmds = ["M", "Z", "WC", "WV" + $("navV").value].concat(wps.map(w => `WA${w.x},${w.y},${w.s}`), ["WL", "A"]);
     cmds.forEach(c => { send(c); writing = writing.then(() => new Promise(r => setTimeout(r, 80))); });
+
     navRunning = true; setNav("Starting…", "run"); drawPath();
   };
-  // messages from the car
+
+  // Messages from the car during the route (the STM32 sends them in Spanish)
   function navMsg(line) {
     let m;
     if ((m = line.match(/^NAV punto (\d+)/))) setNav(`Going to point ${m[1]} of ${wps.length}`, "run");
@@ -407,9 +913,13 @@
     else if (line.startsWith("ALTO") && navRunning) navEnd("Stopped: " + line.slice(5), "");
     else if (line.startsWith("ERR") && navRunning) navEnd("Not started: " + line, "");
   }
+
+  // Backup: if the "FIN AUTO" message is lost, telemetry state 8 (done) also ends the route
   function navTel(m, st, idx) {
     if (navRunning && m === "M" && st === 8) navEnd("Route finished — back at X", "done");
   }
+
+  // Countdown while the car waits at a point
   setInterval(() => {
     if (navRunning && waitUntil) {
       const left = Math.ceil((waitUntil - Date.now()) / 1000);
@@ -417,28 +927,41 @@
       else { waitUntil = 0; $("navStatus").textContent = navText; $("navStatus").className = "run"; }
     }
   }, 250);
+
   renderRoute();
 
-  // ---------- path plot (x forward, y left) ----------
+
+
+  // =====================================================================
+  // PATH MAP (canvas)
+  // Up on the screen = forward (+x), left on the screen = +y.
+  // The scale grows automatically so everything fits (minimum ±500 mm).
+  // =====================================================================
   function drawPath() {
     const c = $("path"), dpr = window.devicePixelRatio || 1;
     const w = c.clientWidth, h = c.clientHeight;
-    c.width = w * dpr; c.height = h * dpr;
+    c.width = w * dpr; c.height = h * dpr;                    // sharp on retina screens
     const g = c.getContext("2d"); g.scale(dpr, dpr);
     const css = getComputedStyle(document.documentElement);
     g.clearRect(0, 0, w, h);
+
+    // scale: px per mm
     let span = 500;
     for (const p of trail.concat(wps)) span = Math.max(span, Math.abs(p.x) * 1.15, Math.abs(p.y) * 1.15);
-    const s = Math.min(w, h) / 2 / span;            // px per mm
-    const X = p => w / 2 - p.y * s, Y = p => h / 2 - p.x * s;   // up = forward (+x), left = +y
+    const s = Math.min(w, h) / 2 / span;
+    const X = p => w / 2 - p.y * s, Y = p => h / 2 - p.x * s;   // car (x, y) in mm -> screen pixels
+
+    // cross through the center
     g.strokeStyle = css.getPropertyValue("--line"); g.lineWidth = 1;
     g.beginPath(); g.moveTo(w / 2, 0); g.lineTo(w / 2, h); g.moveTo(0, h / 2); g.lineTo(w, h / 2); g.stroke();
     g.fillStyle = css.getPropertyValue("--muted"); g.font = "11px sans-serif";
+
     // X = start and finish point, drawn centred exactly on (0, 0)
     g.strokeStyle = css.getPropertyValue("--text"); g.lineWidth = 2.5; g.beginPath();
     g.moveTo(w / 2 - 7, h / 2 - 7); g.lineTo(w / 2 + 7, h / 2 + 7);
     g.moveTo(w / 2 + 7, h / 2 - 7); g.lineTo(w / 2 - 7, h / 2 + 7); g.stroke();
     g.fillText(`grid: ±${Math.round(span)} mm`, 6, h - 6);
+
     // planned route: X -> points -> X (dashed), points numbered (filled = stop)
     if (wps.length) {
       const pts = [{ x: 0, y: 0 }].concat(wps, [{ x: 0, y: 0 }]);
@@ -453,11 +976,14 @@
         g.textAlign = "start"; g.textBaseline = "alphabetic";
       });
     }
+
+    // real path of the car (blue line)
     if (trail.length > 1) {
       g.strokeStyle = css.getPropertyValue("--accent"); g.lineWidth = 2.5; g.beginPath();
       trail.forEach((p, i) => i ? g.lineTo(X(p), Y(p)) : g.moveTo(X(p), Y(p))); g.stroke();
     }
-    // car: arrow pointing where the car faces (heading from the gyro, + = left)
+
+    // car: green arrow pointing where the car faces (heading from the gyro, + = left)
     const p = trail[trail.length - 1] || { x: 0, y: 0 };
     const th = heading * Math.PI / 180;            // 0 = up on the screen (forward)
     const cx = X(p), cy = Y(p), L = 16;
@@ -469,9 +995,17 @@
     g.fillStyle = css.getPropertyValue("--muted");
     g.fillText(`heading ${heading.toFixed(0)}°`, w - 90, 14);
   }
+
   window.addEventListener("resize", drawPath);
   drawPath();
   log("Ready. Tap 'Connect to the car'.");
+
+
+
+  // =====================================================================
+  // OFFLINE MODE AND BLUETOOTH CHECK (at start-up)
+  // =====================================================================
+
   // offline mode: save the app on this device (works if the browser supports service workers)
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("sw.js")
@@ -482,6 +1016,8 @@
     // is loaded it needs no internet (one file, no external code). So: keep the tab open.
     log("Offline mode not supported here (normal in Bluefy). TIP: open the app while you have internet and KEEP THIS TAB OPEN; it works without internet after that.", "rx");
   }
+
+  // Tells you in the Log if Bluetooth is off or not allowed
   if (navigator.bluetooth && navigator.bluetooth.getAvailability) {
     navigator.bluetooth.getAvailability().then(a => log("Bluetooth available: " + (a ? "yes" : "NO (turn Bluetooth on / allow it for this app)"), a ? "okc" : "err"))
       .catch(() => {});
