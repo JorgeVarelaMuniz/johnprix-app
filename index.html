@@ -143,22 +143,25 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 10px;
+    gap: 8px;
     margin: 10px 0;
-    padding: 14px 16px;
+    padding: 14px 14px;
     border-radius: 16px;
     background: var(--jd-green);
     background-image: linear-gradient(135deg, rgba(255,255,255,.10), rgba(0,0,0,.12));   /* soft depth */
     box-shadow: inset 0 -4px 0 var(--jd-yellow), 0 6px 18px rgba(0,0,0,.35);              /* yellow line + shadow */
   }
 
-  h1       { font-size: 22px; margin: 0; letter-spacing: .3px; color: #fff; font-weight: 800; }
-  h1 small { display: block; margin-top: 2px; font-size: 11px; color: var(--jd-yellow); font-weight: 700; letter-spacing: .9px; text-transform: uppercase; white-space: nowrap; }
+  h1       { font-size: 22px; margin: 0; letter-spacing: .3px; color: #fff; font-weight: 800;
+             min-width: 0; }                   /* allows the title to shrink so the pill always fits */
+  h1 small { display: block; margin-top: 2px; font-size: 10.5px; color: var(--jd-yellow); font-weight: 700; letter-spacing: .5px;
+             text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* Connection status pill: grey = disconnected, yellow = connecting, green = connected */
   .pill {
-    font-size: 12px;
-    padding: 5px 10px;
+    flex-shrink: 0;                            /* the pill never gets squeezed or pushed out */
+    font-size: 11px;
+    padding: 5px 9px;
     border-radius: 999px;
     background: rgba(0,0,0,.28);              /* dark glass on top of the green header */
     color: #dfe8dc;
@@ -413,7 +416,7 @@
 <!-- ===================== HEADER + STOP (always visible) ===================== -->
 <div id="top">
   <header>
-    <h1>John Prix<small>MR2006B · STM32 + HM-10 control</small></h1>
+    <h1>John Prix<small>MR2006B · STM32 + HM-10</small></h1>
     <span id="status" class="pill">Disconnected</span>
   </header>
   <button id="stop">STOP</button>
