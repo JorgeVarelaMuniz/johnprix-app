@@ -54,7 +54,7 @@
   #stop { width: 100%; height: 64px; border-radius: 16px; background: var(--stop); color: #fff; font-size: 24px;
     font-weight: 800; letter-spacing: 2px; box-shadow: 0 6px 18px rgba(229,72,77,.4); }
   .note { font-size: 13px; color: var(--muted); margin: 0; }
-  .small { font-size: 12px; padding: 8px 10px; }
+  .small { font-size: 12px; padding: 0 8px; height: 40px; white-space: nowrap; }
   #unsupported { display: none; border-color: var(--warn); }
   table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
   td, th { padding: 6px 4px; border-bottom: 1px solid var(--line); text-align: center; font-size: 14px; }
@@ -127,10 +127,10 @@
   </div>
   <div style="margin-top:10px"><canvas id="path"></canvas></div>
   <div class="row" style="margin-top:10px">
-    <button id="zero" class="small grow">Set position to 0</button>
-    <button id="tel" class="small grow">Telemetry: on</button>
+    <button id="zero" class="small grow">Set 0</button>
+    <button id="tel" class="small grow">Tel: on</button>
     <button id="csv" class="small grow">Save CSV</button>
-    <button id="csvClear" class="small">Clear</button>
+    <button id="csvClear" class="small grow">Clear CSV</button>
   </div>
   <textarea id="csvText" class="inp" style="display:none;height:120px;margin-top:8px;font:11px ui-monospace,monospace"></textarea>
 </section>
@@ -138,10 +138,10 @@
 <section id="route">
   <h2>Route (automatic mode)</h2>
   <div id="navStatus">No route running</div>
-  <p class="note" style="margin-top:8px">Start from X with position set to 0. x = forward, y = left (cm).</p>
+  <p class="note" style="margin-top:8px">Start from X after "Set 0". x = forward, y = left (cm).</p>
   <div class="row" style="margin-top:10px">
-    <button id="teachStop" class="small grow">Save this point (stop 10 s)</button>
-    <button id="teachPass" class="small grow">Save this point (no stop)</button>
+    <button id="teachStop" class="small grow">Save point (stop 10 s)</button>
+    <button id="teachPass" class="small grow">Save point (no stop)</button>
   </div>
   <div class="row" style="margin-top:8px">
     <input id="wx" class="inp" type="text" autocomplete="off" autocorrect="off" placeholder="x cm">
@@ -155,7 +155,7 @@
   </div>
   <input id="navV" type="range" min="100" max="300" step="10" value="200">
   <div class="row" style="margin-top:10px">
-    <button id="wclear" class="small">Clear</button>
+    <button id="wclear" class="small">Clear points</button>
     <button id="navStart" class="ok grow">Start route from X</button>
   </div>
 </section>
@@ -330,7 +330,7 @@
   // ---------- other buttons ----------
   $("hdg").onclick = () => { hdgOn = !hdgOn; $("hdg").textContent = "Keep straight (gyro): " + (hdgOn ? "on" : "off"); send(hdgOn ? "H1" : "H0"); };
   $("zero").onclick = () => { trail = []; heading = 0; drawPath(); send("Z"); };
-  $("tel").onclick = () => { telOn = !telOn; $("tel").textContent = "Telemetry: " + (telOn ? "on" : "off"); send(telOn ? "T1" : "T0"); };
+  $("tel").onclick = () => { telOn = !telOn; $("tel").textContent = "Tel: " + (telOn ? "on" : "off"); send(telOn ? "T1" : "T0"); };
   $("send").onclick = () => { const v = $("raw").value.trim(); if (v) { send(v); $("raw").value = ""; } };
   // Save CSV: the iPhone share menu (WhatsApp, AirDrop, Save to Files); if the browser
   // cannot share files, share/copy the text; last option: show it to copy by hand.
