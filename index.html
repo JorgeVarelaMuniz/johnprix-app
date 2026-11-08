@@ -130,7 +130,9 @@
     <button id="zero" class="small grow">Set position to 0</button>
     <button id="tel" class="small grow">Telemetry: on</button>
     <button id="csv" class="small grow">Save CSV</button>
+    <button id="csvClear" class="small">Clear</button>
   </div>
+  <textarea id="csvText" class="inp" style="display:none;height:120px;margin-top:8px;font:11px ui-monospace,monospace"></textarea>
 </section>
 
 <section id="route">
@@ -330,16 +332,29 @@
   $("zero").onclick = () => { trail = []; heading = 0; drawPath(); send("Z"); };
   $("tel").onclick = () => { telOn = !telOn; $("tel").textContent = "Telemetry: " + (telOn ? "on" : "off"); send(telOn ? "T1" : "T0"); };
   $("send").onclick = () => { const v = $("raw").value.trim(); if (v) { send(v); $("raw").value = ""; } };
-  $("csv").onclick = () => {
+  // Save CSV: the iPhone share menu (WhatsApp, AirDrop, Save to Files); if the browser
+  // cannot share files, share/copy the text; last option: show it to copy by hand.
+  $("csv").onclick = async () => {
     if (!rows.length) { log("No telemetry yet", "err"); return; }
     const head = "phone_time,t_ms,mode,v_cmd,w_cmd,v_left,v_right,yaw_deg,x_mm,y_mm,tilt_x_deg,tilt_y_deg,straight_fix_dps\n";
-    const blob = new Blob([head + rows.join("\n") + "\n"], { type: "text/csv" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "johnprix_telemetry_" + new Date().toISOString().replace(/[:.]/g, "-") + ".csv";
-    document.body.appendChild(a); a.click(); a.remove();
-    log("CSV saved (" + rows.length + " rows)", "okc");
+    const text = head + rows.join("\n") + "\n";
+    const name = "johnprix_telemetry_" + new Date().toISOString().replace(/[:.]/g, "-") + ".csv";
+    try {
+      const file = new File([text], name, { type: "text/csv" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: name }); log("CSV shared (" + rows.length + " rows)", "okc"); return;
+      }
+      if (navigator.share) { await navigator.share({ title: name, text }); log("CSV shared as text (" + rows.length + " rows)", "okc"); return; }
+    } catch (e) { if (e && e.name === "AbortError") return; log("Share not available: " + errText(e), "rx"); }
+    try { await navigator.clipboard.writeText(text); log("CSV copied (" + rows.length + " rows): paste it in WhatsApp or Notes", "okc"); return; }
+    catch (e) { /* show it */ }
+    const ta = $("csvText"); ta.value = text; ta.style.display = "block"; ta.focus(); ta.select();
+    log("Select all and copy the text below", "rx");
   };
+  $("csvClear").onclick = () => { rows = []; try { localStorage.removeItem("jp-rows"); } catch (e) {} log("Telemetry cleared", "okc"); };
+  // keep the telemetry if the page is reloaded
+  try { rows = JSON.parse(localStorage.getItem("jp-rows") || "[]"); } catch (e) { rows = []; }
+  setInterval(() => { try { localStorage.setItem("jp-rows", JSON.stringify(rows.slice(-20000))); } catch (e) {} }, 5000);
 
   // ---------- route (automatic mode) ----------
   const NAV_NAMES = ["idle", "turning", "turning", "driving", "arriving", "waiting", "final turn", "final turn", "done"];
