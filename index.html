@@ -110,9 +110,6 @@
     <div class="row"><span class="grow">Max turn rate</span><b id="wmaxLbl">60 °/s</b></div>
     <input id="wmax" type="range" min="20" max="120" step="5" value="60">
   </div>
-  <div class="row" style="margin-top:10px">
-    <button id="hdg" class="small grow">Keep straight (gyro): on</button>
-  </div>
 </section>
 
 <section>
@@ -327,7 +324,6 @@
   $("stop").onclick = () => { release(); send("S"); if (navRunning) navEnd("Stopped by you", ""); };
 
   // ---------- other buttons ----------
-  $("hdg").onclick = () => { hdgOn = !hdgOn; $("hdg").textContent = "Keep straight (gyro): " + (hdgOn ? "on" : "off"); send(hdgOn ? "H1" : "H0"); };
   $("zero").onclick = () => { trail = []; heading = 0; drawPath(); send("Z"); };
   $("send").onclick = () => { const v = $("raw").value.trim(); if (v) { send(v); $("raw").value = ""; } };
   // Save CSV: the iPhone share menu (WhatsApp, AirDrop, Save to Files); if the browser
