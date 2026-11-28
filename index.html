@@ -24,6 +24,7 @@
     WC           clear route          WV v      route speed (mm/s)
     WA x,y,s     add point (mm, mm, stop seconds)
     WL           list route
+    LL           repeat the car's last messages (sent by the app after a gap)
 
   Coordinates: x = forward, y = left (same as the car's odometry).
   The whole app is this single file (no internet libraries), so once it
@@ -590,6 +591,10 @@
   // Bluetooth
   let device = null, chr = null, rxBuf = "", writing = Promise.resolve(), pendingDrive = null;
 
+  // Link watch (v20): screen wake lock, time the app went to the background, start of a gap without data
+  const APP_VERSION = "v20 (2026-11-27)";
+  let wakeLock = null, wakeTold = false, hiddenAt = 0, gapSince = 0;
+
   // Driving: mode "M" (manual) or "A" (automatic), joystick position (-1..1)
   let mode = "M", joy = { active: false, x: 0, y: 0 }, lastSentZero = true, telOn = true, hdgOn = true;
 
@@ -661,6 +666,8 @@
       setStatus("Connected", "on");
       $("connect").textContent = "Disconnect";
       log("Connected to " + (device.name || "car"), "okc");
+      lastRx = 0; gapSince = 0;
+      keepAwake();
 
       // start in manual mode with telemetry and heading hold on
       send("M"); send(telOn ? "T1" : "T0"); send(hdgOn ? "H1" : "H0");
@@ -671,10 +678,46 @@
   }
 
   function onDisconnected() {
+    if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+    gapSince = 0;
     chr = null; setStatus("Disconnected");
     $("connect").textContent = "Connect to the car";
     log("Bluetooth link lost (the car stops by itself)", "err");
   }
+
+  // ---------------------------------------------------------------------
+  // LINK WATCH (v20). Why: when the iPhone locks or the browser goes to the background,
+  // iOS stops delivering Bluetooth data although the app still says "Connected". Seen on
+  // Nov 27: telemetry stopped in the middle of a run and "FIN AUTO" never arrived (the car
+  // finished by itself). So the app (1) keeps the screen on while it is connected,
+  // (2) writes in the Log when it was in the background or when no data arrived for 2 s,
+  // (3) asks the car to repeat its last messages (command LL) when the data comes back.
+  // ---------------------------------------------------------------------
+  async function keepAwake() {
+    if (!chr || document.visibilityState !== "visible") return;
+    if (!("wakeLock" in navigator)) {
+      if (!wakeTold) { wakeTold = true; log("This browser cannot keep the screen on: set Auto-Lock to 'Never' in the phone settings while you use the car", "err"); }
+      return;
+    }
+    try {
+      wakeLock = await navigator.wakeLock.request("screen");
+      if (!wakeTold) { wakeTold = true; log("The screen stays on while the car is connected", "okc"); }
+    } catch (e) {
+      if (!wakeTold) { wakeTold = true; log("Could not keep the screen on (" + errText(e) + "): set Auto-Lock to 'Never'", "err"); }
+    }
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") { hiddenAt = Date.now(); return; }
+    if (hiddenAt && chr) {
+      const s = ((Date.now() - hiddenAt) / 1000).toFixed(0);
+      log("The app was in the background for " + s + " s: messages from the car may be missing. Asking the car to repeat them…", "err");
+      lastRx = Date.now(); gapSince = 0;          // this gap is already reported
+      send("LL");
+    }
+    hiddenAt = 0;
+    keepAwake();                                   // the system releases the wake lock in the background
+  });
 
   // The same button connects or disconnects
   $("connect").onclick = () => {
@@ -712,6 +755,12 @@
   // (yaw and tilt come multiplied by 10 to send integers)
   // =====================================================================
   function handleLine(line) {
+    if (gapSince) {                                // data is back after a gap: ask for what was missed
+      const g = ((Date.now() - gapSince) / 1000).toFixed(1);
+      gapSince = 0;
+      log("Data again after " + g + " s without data. Asking the car to repeat its last messages…", "okc");
+      send("LL");
+    }
     lastRx = Date.now();
 
     if (line.startsWith("T,")) {
@@ -748,7 +797,15 @@
   }
 
   // "Link" card: seconds since the last line (if it grows, the link is lost)
-  setInterval(() => { $("tAge").textContent = lastRx ? ((Date.now() - lastRx) / 1000).toFixed(1) : "–"; }, 250);
+  // v20: with telemetry on the car sends 5 lines per second, so 2 s without data is a gap -> Log
+  setInterval(() => {
+    const age = lastRx ? (Date.now() - lastRx) / 1000 : 0;
+    $("tAge").textContent = lastRx ? age.toFixed(1) : "–";
+    if (chr && telOn && lastRx && !gapSince && age > 2 && document.visibilityState === "visible") {
+      gapSince = lastRx;
+      log("No data from the car for more than 2 s (link paused or out of range). The car keeps its route by itself.", "err");
+    }
+  }, 250);
 
 
 
@@ -1107,7 +1164,7 @@
 
   window.addEventListener("resize", drawPath);
   drawPath();
-  log("Ready. Tap 'Connect to the car'.");
+  log("John Prix app " + APP_VERSION + ". Ready. Tap 'Connect to the car'.");
 
 
 
